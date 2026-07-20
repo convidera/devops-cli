@@ -8,11 +8,15 @@ linters:
     - unused
     - gosimple
     - ineffassign
+
+formatters:
+  enable:
     - gofmt
     - goimports
   settings:
     goimports:
-      local-prefixes: github.com/convidera/devops-parallel-runner
+      local-prefixes:
+        - github.com/convidera/devops-parallel-runner
 
 issues:
   max-issues-per-linter: 0
