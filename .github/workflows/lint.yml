@@ -9,7 +9,7 @@ concurrency:
 
 jobs:
   lint:
-    runs-on: gha-runners-convidera-small
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
