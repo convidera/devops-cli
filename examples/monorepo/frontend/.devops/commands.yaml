@@ -1,0 +1,26 @@
+# frontend/.devops/commands.yaml
+
+# ── install ───────────────────────────────────────────────────────────────────
+# Runs on the host — no Docker container required for package installs.
+install:
+  host:
+    - npm ci
+
+# ── test ──────────────────────────────────────────────────────────────────────
+# Same command name as backend/test.
+# When you run `devops test`, both modules' test commands run in parallel
+# (they share default priority 100).
+test:
+  node:
+    - npm run test -- --ci --passWithNoTests
+
+# ── lint ──────────────────────────────────────────────────────────────────────
+lint:
+  node:
+    - npm run lint
+    - npm run type-check
+
+# ── build ─────────────────────────────────────────────────────────────────────
+build:
+  node:
+    - npm run build

@@ -1,0 +1,50 @@
+# backend/.devops/commands.yaml
+#
+# Concepts demonstrated:
+#   - Multiple containers per command
+#   - Simple string entries (default priority 100)
+#   - Map entries with explicit priority
+#   - host container (runs directly on the machine, no Docker)
+
+# ── migrate ───────────────────────────────────────────────────────────────────
+# Priority 10 means this runs before same-level modules that use priority 100.
+# The "db" container is verified first, then migrations are applied.
+migrate:
+  db:
+    - script: pg_isready -U postgres
+      priority: 10
+  app:
+    - script: php artisan migrate --force
+      priority: 20
+
+# ── seed ──────────────────────────────────────────────────────────────────────
+# Depends on migrate completing first (lower priority numbers run first).
+# Because seed uses the default priority (100), running `devops seed` will
+# execute only after all priority-10 and priority-20 groups have finished.
+seed:
+  app:
+    - php artisan db:seed
+
+# ── test ──────────────────────────────────────────────────────────────────────
+# Multiple scripts in one container run sequentially in order.
+test:
+  app:
+    - php artisan config:cache
+    - php artisan test --parallel
+
+# ── lint ──────────────────────────────────────────────────────────────────────
+lint:
+  app:
+    - ./vendor/bin/phpcs
+    - ./vendor/bin/phpstan analyse
+
+# ── queue:work ────────────────────────────────────────────────────────────────
+# Long-running process example — typically called directly, not via `devops all`.
+queue:work:
+  app:
+    - php artisan queue:work --sleep=3 --tries=3
+
+# ── shell / exec ──────────────────────────────────────────────────────────────
+# devops backend exec          → opens a shell in the "app" container
+# devops backend exec php -r   → runs an arbitrary command in the container
+# (The first container key is used; order in YAML determines which is first.)

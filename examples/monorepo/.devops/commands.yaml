@@ -1,0 +1,15 @@
+# Root-level .devops/commands.yaml
+# This file lives at the monorepo root and runs host-level orchestration tasks.
+
+setup:
+  host:
+    - cp .env.example .env
+    - docker compose pull
+
+up:
+  host:
+    - docker compose up -d
+
+down:
+  host:
+    - docker compose down
