@@ -5,15 +5,16 @@ linters:
     - errcheck
     - govet
     - staticcheck
-    - unused
-    - gosimple
     - ineffassign
+
+formatters:
+  enable:
     - gofmt
     - goimports
-
-linters-settings:
-  goimports:
-    local-prefixes: github.com/convidera/devops-parallel-runner
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/convidera/devops-parallel-runner
 
 issues:
   max-issues-per-linter: 0
