@@ -86,19 +86,19 @@ func runPanel(idx int, p *panel, ch chan<- tea.Msg) {
 	cmd.Stdout = w
 	cmd.Stderr = w
 	if err := cmd.Start(); err != nil {
-		w.Close()
-		r.Close()
+		_ = w.Close()
+		_ = r.Close()
 		ch <- exitMsg{idx, 1}
 		return
 	}
-	w.Close()
+	_ = w.Close()
 
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 512*1024), 512*1024)
 	for sc.Scan() {
 		ch <- lineMsg{idx, stripANSI(sc.Text())}
 	}
-	r.Close()
+	_ = r.Close()
 
 	code := 0
 	if err := cmd.Wait(); err != nil {
