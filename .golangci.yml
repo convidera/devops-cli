@@ -14,7 +14,7 @@ formatters:
   settings:
     goimports:
       local-prefixes:
-        - github.com/convidera/devops-parallel-runner
+        - github.com/convidera/devops-cli
 
 issues:
   max-issues-per-linter: 0

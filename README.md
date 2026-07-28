@@ -14,15 +14,15 @@ Grab the latest binary for your platform from the [releases page](../../releases
 
 ```bash
 # macOS (Apple Silicon)
-curl -L https://github.com/convidera/devops-parallel-runner/releases/latest/download/devops-darwin-arm64 -o /usr/local/bin/devops
+curl -L https://github.com/convidera/devops-cli/releases/latest/download/devops-darwin-arm64 -o /usr/local/bin/devops
 chmod +x /usr/local/bin/devops
 
 # macOS (Intel)
-curl -L https://github.com/convidera/devops-parallel-runner/releases/latest/download/devops-darwin-amd64 -o /usr/local/bin/devops
+curl -L https://github.com/convidera/devops-cli/releases/latest/download/devops-darwin-amd64 -o /usr/local/bin/devops
 chmod +x /usr/local/bin/devops
 
 # Linux (amd64)
-curl -L https://github.com/convidera/devops-parallel-runner/releases/latest/download/devops-linux-amd64 -o /usr/local/bin/devops
+curl -L https://github.com/convidera/devops-cli/releases/latest/download/devops-linux-amd64 -o /usr/local/bin/devops
 chmod +x /usr/local/bin/devops
 ```
 
@@ -31,14 +31,14 @@ chmod +x /usr/local/bin/devops
 Requires Go 1.22+.
 
 ```bash
-go install github.com/convidera/devops-parallel-runner@latest
+go install github.com/convidera/devops-cli@latest
 ```
 
 Or clone and build:
 
 ```bash
-git clone https://github.com/convidera/devops-parallel-runner
-cd devops-parallel-runner
+git clone https://github.com/convidera/devops-cli
+cd devops-cli
 go build -o devops .
 ```
 
@@ -54,6 +54,8 @@ Each module needs a `.devops/commands.yaml` file. The structure is:
 ```
 
 `<container>` is either a Docker Compose service name or `host` (runs directly on the machine without Docker).
+
+All scripts listed under the same `<container>` run in a single shell process, in order, so `cd`, `export`, and other shell state carry over from one line to the next (a failing line aborts the rest, like `set -e`). Different containers — and different modules — still run as separate processes.
 
 ### Example
 
@@ -115,6 +117,7 @@ devops all <command>               Run command across all modules (explicit)
 devops <module> exec [cmd...]      Open interactive shell in module's container
 devops <module> shell              Alias for exec
 devops help                        Show this help
+devops reinstall                   Download and install the latest release
 ```
 
 ### Examples

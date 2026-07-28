@@ -4,11 +4,14 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 
 	"golang.org/x/term"
 )
 
 // runModuleSequential runs all containers/entries for a module's command in order.
+// Entries for the same container share a single shell invocation, so state like
+// `cd` and exported variables carries over from one entry to the next.
 func runModuleSequential(m *Module, command string, extraArgs []string) error {
 	containers, ok := m.Config[command]
 	if !ok {
@@ -18,12 +21,25 @@ func runModuleSequential(m *Module, command string, extraArgs []string) error {
 		fmt.Printf("Running commands for: %s\n", container)
 		for _, entry := range entries {
 			fmt.Printf("Executing: %s\n", entry.Script)
-			if err := runScript(container, entry.Script, extraArgs); err != nil {
-				return fmt.Errorf("[%s/%s] command failed: %w", m.Name, container, err)
-			}
+		}
+		if err := runScript(container, joinEntries(entries), extraArgs); err != nil {
+			return fmt.Errorf("[%s/%s] command failed: %w", m.Name, container, err)
 		}
 	}
 	return nil
+}
+
+// joinEntries combines a container's entries into a single shell script so
+// they run in one process, letting `cd`/`export`/etc. persist across lines.
+// `set -e` makes the script stop at the first failing entry, matching the
+// previous per-entry fail-fast behavior.
+func joinEntries(entries []Entry) string {
+	lines := make([]string, 0, len(entries)+1)
+	lines = append(lines, "set -e")
+	for _, e := range entries {
+		lines = append(lines, e.Script)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // runScript executes a single script in the given container (or "host").

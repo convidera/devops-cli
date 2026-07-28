@@ -1,4 +1,4 @@
-module github.com/convidera/devops-parallel-runner
+module github.com/convidera/devops-cli
 
 go 1.25.0
 
