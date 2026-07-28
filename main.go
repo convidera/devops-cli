@@ -26,6 +26,8 @@ func main() {
 			os.Exit(1)
 		}
 		os.Exit(runAllCommand(args[1], args[2:]))
+	case "reinstall":
+		os.Exit(runReinstall())
 	}
 
 	modules, err := discoverModules()
@@ -157,6 +159,7 @@ func showHelp() {
 	fmt.Println("  devops <module> exec [cmd...]      Open interactive shell in module's container")
 	fmt.Println("  devops <module> shell              Alias for exec")
 	fmt.Println("  devops help                        Show this help")
+	fmt.Println("  devops reinstall                   Download and install the latest release")
 	fmt.Println()
 
 	if len(modules) == 0 {
