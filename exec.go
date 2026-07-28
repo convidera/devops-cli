@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"golang.org/x/term"
 )
@@ -63,7 +65,7 @@ func runScript(container, script string, extraArgs []string) error {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	return runWithSignalForwarding(cmd)
 }
 
 // runExec opens an interactive shell (or runs a command) in a module's container.
@@ -92,9 +94,49 @@ func runExec(m *Module, extraArgs []string) error {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	return runWithSignalForwarding(cmd)
 }
 
 func isTTY() bool {
 	return term.IsTerminal(int(os.Stdin.Fd()))
+}
+
+// runWithSignalForwarding starts cmd and blocks until it exits, forwarding
+// SIGINT/SIGTERM to it instead of letting Go's default handling kill this
+// process immediately. Without this, a single Ctrl+C would kill the devops-cli
+// wrapper right away while a child like `docker compose up` kept running its
+// own graceful shutdown in the background, printing to the shared terminal
+// after control had already returned to the shell. A second signal escalates
+// to a hard kill, matching the usual "one Ctrl+C to stop gracefully, two to
+// force it" shell convention.
+func runWithSignalForwarding(cmd *exec.Cmd) error {
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+
+	done := make(chan struct{})
+	go func() {
+		forwarded := false
+		for {
+			select {
+			case sig := <-sigCh:
+				if !forwarded {
+					forwarded = true
+					_ = cmd.Process.Signal(sig)
+				} else {
+					_ = cmd.Process.Kill()
+				}
+			case <-done:
+				return
+			}
+		}
+	}()
+
+	err := cmd.Wait()
+	close(done)
+	return err
 }
