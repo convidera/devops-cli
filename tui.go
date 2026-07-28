@@ -54,6 +54,20 @@ type panel struct {
 	autoScroll bool
 	status     string // "running" | "done" | "failed"
 	exitCode   int
+	proc       *os.Process
+}
+
+// signal delivers sig to the panel's process if it's still running. Used to
+// stop a panel's subprocess (e.g. `docker compose up`) instead of leaving it
+// running in the background after the TUI quits.
+func (p *panel) signal(sig os.Signal) {
+	p.mu.RLock()
+	proc := p.proc
+	running := p.status == "running"
+	p.mu.RUnlock()
+	if proc != nil && running {
+		_ = proc.Signal(sig)
+	}
 }
 
 func newPanel(label, cmd string) *panel {
@@ -91,6 +105,9 @@ func runPanel(idx int, p *panel, ch chan<- tea.Msg) {
 		ch <- exitMsg{idx, 1}
 		return
 	}
+	p.mu.Lock()
+	p.proc = cmd.Process
+	p.mu.Unlock()
 	_ = w.Close()
 
 	sc := bufio.NewScanner(r)
@@ -143,13 +160,14 @@ func statusFrame(p *panel, tick int) string {
 // ── Model ────────────────────────────────────────────────────────────────────
 
 type model struct {
-	panels  []*panel
-	focus   int
-	width   int
-	height  int
-	tick    int
-	ch      chan tea.Msg
-	running int
+	panels   []*panel
+	focus    int
+	width    int
+	height   int
+	tick     int
+	ch       chan tea.Msg
+	running  int
+	stopping bool
 }
 
 func newModel(panels []*panel) model {
@@ -207,9 +225,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		p.mu.Unlock()
 		m.running--
+		if m.stopping && m.running == 0 {
+			return m, tea.Quit
+		}
 		return m, listenCh(m.ch)
 
 	case allDoneMsg:
+		if m.stopping {
+			return m, tea.Quit
+		}
 		return m, nil
 
 	case tea.KeyMsg:
@@ -217,6 +241,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		contentH := m.height - 2
 		switch msg.String() {
 		case "q", "Q", "ctrl+c":
+			if m.running == 0 {
+				return m, tea.Quit
+			}
+			if !m.stopping {
+				// First press: ask running panels to stop gracefully and
+				// wait for them to actually exit before quitting the TUI.
+				m.stopping = true
+				for _, panel := range m.panels {
+					panel.signal(os.Interrupt)
+				}
+				return m, nil
+			}
+			// Second press: force-kill anything still running and quit now.
+			for _, panel := range m.panels {
+				panel.signal(os.Kill)
+			}
 			return m, tea.Quit
 		case "tab", "right", "l":
 			m.focus = (m.focus + 1) % n
@@ -328,9 +368,12 @@ func (m model) View() string {
 		}
 	}
 	var barText string
-	if m.running == 0 {
+	switch {
+	case m.running == 0:
 		barText = fmt.Sprintf(" Done: %d/%d succeeded  [q]uit  [tab/←→/h/l]focus  [↑↓/PgUp/PgDn/j/k]scroll  [g/G]top/end", okCount, n)
-	} else {
+	case m.stopping:
+		barText = fmt.Sprintf(" Stopping (%d active)… press again to force quit", m.running)
+	default:
 		barText = fmt.Sprintf(" Running (%d active)  [q]uit  [tab/←→/h/l]focus  [↑↓/PgUp/PgDn/j/k]scroll  [g/G]top/end", m.running)
 	}
 	sb.WriteString(barStyle.Render(fitWidth(barText, m.width)))

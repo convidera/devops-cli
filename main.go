@@ -72,7 +72,7 @@ func runAllCommand(command string, extraArgs []string) int {
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
+		if err := runWithSignalForwarding(cmd); err != nil {
 			return 1
 		}
 		return 0
