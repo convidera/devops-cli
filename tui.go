@@ -160,14 +160,15 @@ func statusFrame(p *panel, tick int) string {
 // ── Model ────────────────────────────────────────────────────────────────────
 
 type model struct {
-	panels   []*panel
-	focus    int
-	width    int
-	height   int
-	tick     int
-	ch       chan tea.Msg
-	running  int
-	stopping bool
+	panels      []*panel
+	focus       int
+	width       int
+	height      int
+	tick        int
+	ch          chan tea.Msg
+	running     int
+	stopping    bool
+	stopPresses int
 }
 
 func newModel(panels []*panel) model {
@@ -244,16 +245,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.running == 0 {
 				return m, tea.Quit
 			}
-			if !m.stopping {
-				// First press: ask running panels to stop gracefully and
-				// wait for them to actually exit before quitting the TUI.
-				m.stopping = true
+			m.stopping = true
+			m.stopPresses++
+			if m.stopPresses < 3 {
+				// Forward the interrupt (again) and wait for panels to exit
+				// on their own. Tools like `docker compose` implement their
+				// own graceful-then-force handling on a second SIGINT, so we
+				// keep forwarding rather than killing them ourselves — a
+				// SIGKILL from us would cut a graceful shutdown off mid-way
+				// (e.g. containers left running) instead of letting it finish.
 				for _, panel := range m.panels {
 					panel.signal(os.Interrupt)
 				}
 				return m, nil
 			}
-			// Second press: force-kill anything still running and quit now.
+			// Third press: something isn't responding to SIGINT. Force-kill
+			// as a last resort so the TUI doesn't trap the user forever.
 			for _, panel := range m.panels {
 				panel.signal(os.Kill)
 			}
@@ -372,7 +379,7 @@ func (m model) View() string {
 	case m.running == 0:
 		barText = fmt.Sprintf(" Done: %d/%d succeeded  [q]uit  [tab/←→/h/l]focus  [↑↓/PgUp/PgDn/j/k]scroll  [g/G]top/end", okCount, n)
 	case m.stopping:
-		barText = fmt.Sprintf(" Stopping (%d active)… press again to force quit", m.running)
+		barText = fmt.Sprintf(" Stopping (%d active)… press %d more time(s) to force quit", m.running, imax(0, 3-m.stopPresses))
 	default:
 		barText = fmt.Sprintf(" Running (%d active)  [q]uit  [tab/←→/h/l]focus  [↑↓/PgUp/PgDn/j/k]scroll  [g/G]top/end", m.running)
 	}
