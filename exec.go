@@ -102,13 +102,19 @@ func isTTY() bool {
 }
 
 // runWithSignalForwarding starts cmd and blocks until it exits, forwarding
-// SIGINT/SIGTERM to it instead of letting Go's default handling kill this
-// process immediately. Without this, a single Ctrl+C would kill the devops-cli
-// wrapper right away while a child like `docker compose up` kept running its
-// own graceful shutdown in the background, printing to the shared terminal
-// after control had already returned to the shell. A second signal escalates
-// to a hard kill, matching the usual "one Ctrl+C to stop gracefully, two to
-// force it" shell convention.
+// every SIGINT/SIGTERM we receive straight through to it instead of letting
+// Go's default handling kill this process immediately. Without this, a
+// single Ctrl+C would kill the devops-cli wrapper right away while a child
+// like `docker compose up` kept running its own graceful shutdown in the
+// background, printing to the shared terminal after control had already
+// returned to the shell.
+//
+// Deliberately does NOT escalate to SIGKILL on a repeated signal: tools like
+// `docker compose` already implement their own "first Ctrl+C graceful, second
+// forces it" handling internally. If we SIGKILL the child ourselves instead
+// of forwarding that second signal, we yank it out mid-shutdown before it
+// can tell the engine to stop remaining containers, potentially leaving them
+// running — worse than doing nothing.
 func runWithSignalForwarding(cmd *exec.Cmd) error {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -120,16 +126,10 @@ func runWithSignalForwarding(cmd *exec.Cmd) error {
 
 	done := make(chan struct{})
 	go func() {
-		forwarded := false
 		for {
 			select {
 			case sig := <-sigCh:
-				if !forwarded {
-					forwarded = true
-					_ = cmd.Process.Signal(sig)
-				} else {
-					_ = cmd.Process.Kill()
-				}
+				_ = cmd.Process.Signal(sig)
 			case <-done:
 				return
 			}
