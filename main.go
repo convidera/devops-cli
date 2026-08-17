@@ -115,7 +115,8 @@ func runSingleModuleCommand(m *Module, command string, extraArgs []string) int {
 	return 0
 }
 
-// runGroupParallel launches a same-priority group of modules in the parallel TUI.
+// runGroupParallel launches a same-priority group of modules in parallel — in
+// the TUI when a terminal is attached, as prefixed log output otherwise.
 // It calls the binary itself as a subprocess per module so each module's full
 // execution logic (multiple containers, multiple scripts) runs inside a panel.
 func runGroupParallel(modules []*Module, command string, extraArgs []string) bool {
@@ -125,7 +126,7 @@ func runGroupParallel(modules []*Module, command string, extraArgs []string) boo
 		parts := append([]string{self, m.Name, command}, extraArgs...)
 		panels = append(panels, newPanel(m.Name, shellJoin(parts)))
 	}
-	return runTUI(panels)
+	return runPanels(panels)
 }
 
 // shellJoin builds a shell-safe command string by single-quoting each argument.

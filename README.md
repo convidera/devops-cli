@@ -151,6 +151,24 @@ When multiple modules share the same priority for a command they run in parallel
 
 After all panels finish, a summary shows which modules succeeded or failed.
 
+### Non-interactive runs
+
+The TUI needs a terminal. Without one — in CI, when output is piped or redirected, or when there is no controlling terminal — modules still run in parallel, but their output is streamed as plain lines prefixed with the module name, followed by the same summary:
+
+```
+[api]      starting
+[frontend] starting
+[api]      PHPStan: no errors
+[frontend] done
+[api]      done
+
+=== Parallel Summary ===
+  ✓  api
+  ✓  frontend
+```
+
+Set `DEVOPS_NO_TUI=1` to force this mode even in an interactive terminal.
+
 ## YAML reference
 
 ```yaml

@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"regexp"
@@ -90,10 +91,18 @@ func (p *panel) snap() []string {
 
 // ── Runner ───────────────────────────────────────────────────────────────────
 
-func runPanel(idx int, p *panel, ch chan<- tea.Msg) {
+// panelSink receives a panel's output lines and its final exit code. It keeps
+// runPanel independent of the front-end, so the same runner feeds both the TUI
+// and the headless fallback.
+type panelSink struct {
+	line func(idx int, line string)
+	exit func(idx int, code int)
+}
+
+func runPanel(idx int, p *panel, sink panelSink) {
 	r, w, err := os.Pipe()
 	if err != nil {
-		ch <- exitMsg{idx, 1}
+		sink.exit(idx, 1)
 		return
 	}
 	cmd := exec.Command("sh", "-c", p.cmd)
@@ -102,7 +111,7 @@ func runPanel(idx int, p *panel, ch chan<- tea.Msg) {
 	if err := cmd.Start(); err != nil {
 		_ = w.Close()
 		_ = r.Close()
-		ch <- exitMsg{idx, 1}
+		sink.exit(idx, 1)
 		return
 	}
 	p.mu.Lock()
@@ -113,7 +122,7 @@ func runPanel(idx int, p *panel, ch chan<- tea.Msg) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 512*1024), 512*1024)
 	for sc.Scan() {
-		ch <- lineMsg{idx, stripANSI(sc.Text())}
+		sink.line(idx, stripANSI(sc.Text()))
 	}
 	_ = r.Close()
 
@@ -125,7 +134,7 @@ func runPanel(idx int, p *panel, ch chan<- tea.Msg) {
 			code = 1
 		}
 	}
-	ch <- exitMsg{idx, code}
+	sink.exit(idx, code)
 }
 
 // ── Styles ───────────────────────────────────────────────────────────────────
@@ -173,12 +182,16 @@ type model struct {
 
 func newModel(panels []*panel) model {
 	ch := make(chan tea.Msg, 4096)
+	sink := panelSink{
+		line: func(idx int, line string) { ch <- lineMsg{idx, line} },
+		exit: func(idx, code int) { ch <- exitMsg{idx, code} },
+	}
 	var wg sync.WaitGroup
 	for i, p := range panels {
 		wg.Add(1)
 		go func(idx int, p *panel) {
 			defer wg.Done()
-			runPanel(idx, p, ch)
+			runPanel(idx, p, sink)
 		}(i, p)
 	}
 	go func() {
@@ -404,6 +417,16 @@ func imin(a, b int) int {
 	return b
 }
 
+// runPanels runs the given panels in parallel, using the interactive TUI when
+// a terminal is available and plain prefixed logging otherwise.
+// Returns true if all panels succeeded, false if any failed.
+func runPanels(panels []*panel) bool {
+	if !canUseTUI() {
+		return runHeadless(os.Stdout, panels)
+	}
+	return runTUI(panels)
+}
+
 // runTUI launches the side-by-side TUI for the given panels and blocks until
 // the user quits (or all panels finish and the user acknowledges).
 // Returns true if all panels succeeded, false if any failed.
@@ -413,15 +436,23 @@ func runTUI(panels []*panel) bool {
 		fmt.Fprintf(os.Stderr, "tui error: %v\n", err)
 		return false
 	}
+	return printSummary(os.Stdout, panels)
+}
 
-	fmt.Println()
-	fmt.Println("=== Parallel Summary ===")
+// printSummary writes the per-panel result list and reports whether every
+// panel succeeded.
+func printSummary(w io.Writer, panels []*panel) bool {
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "=== Parallel Summary ===")
 	ok := true
 	for _, p := range panels {
-		if p.status == "done" {
-			fmt.Printf("  ✓  %s\n", p.label)
+		p.mu.RLock()
+		status, code := p.status, p.exitCode
+		p.mu.RUnlock()
+		if status == "done" {
+			fmt.Fprintf(w, "  ✓  %s\n", p.label)
 		} else {
-			fmt.Printf("  ✗  %s  (exit %d)\n", p.label, p.exitCode)
+			fmt.Fprintf(w, "  ✗  %s  (exit %d)\n", p.label, code)
 			ok = false
 		}
 	}
