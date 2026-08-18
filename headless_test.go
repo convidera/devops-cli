@@ -2,9 +2,16 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 )
+
+type errWriter struct{}
+
+func (errWriter) Write([]byte) (int, error) {
+	return 0, errors.New("write failed")
+}
 
 func TestRunHeadless_success(t *testing.T) {
 	var buf bytes.Buffer
@@ -64,6 +71,12 @@ func TestRunHeadless_capturesStderr(t *testing.T) {
 	}
 	if out := buf.String(); !strings.Contains(out, "[api] oops") {
 		t.Errorf("stderr not captured:\n%s", out)
+	}
+}
+
+func TestRunHeadless_writeError(t *testing.T) {
+	if ok := runHeadless(errWriter{}, []*panel{newPanel("api", "true")}); ok {
+		t.Fatal("runHeadless = true with failing writer")
 	}
 }
 

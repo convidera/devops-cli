@@ -442,17 +442,25 @@ func runTUI(panels []*panel) bool {
 // printSummary writes the per-panel result list and reports whether every
 // panel succeeded.
 func printSummary(w io.Writer, panels []*panel) bool {
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, "=== Parallel Summary ===")
+	if _, err := fmt.Fprintln(w); err != nil {
+		return false
+	}
+	if _, err := fmt.Fprintln(w, "=== Parallel Summary ==="); err != nil {
+		return false
+	}
 	ok := true
 	for _, p := range panels {
 		p.mu.RLock()
 		status, code := p.status, p.exitCode
 		p.mu.RUnlock()
 		if status == "done" {
-			fmt.Fprintf(w, "  ✓  %s\n", p.label)
+			if _, err := fmt.Fprintf(w, "  ✓  %s\n", p.label); err != nil {
+				return false
+			}
 		} else {
-			fmt.Fprintf(w, "  ✗  %s  (exit %d)\n", p.label, code)
+			if _, err := fmt.Fprintf(w, "  ✗  %s  (exit %d)\n", p.label, code); err != nil {
+				return false
+			}
 			ok = false
 		}
 	}

@@ -44,10 +44,14 @@ func canUseTUI() bool {
 // attributable. Returns true if all panels succeeded.
 func runHeadless(w io.Writer, panels []*panel) bool {
 	var mu sync.Mutex
+	var writeErr error
 	emit := func(format string, args ...any) {
 		mu.Lock()
 		defer mu.Unlock()
-		fmt.Fprintf(w, format, args...)
+		if writeErr != nil {
+			return
+		}
+		_, writeErr = fmt.Fprintf(w, format, args...)
 	}
 
 	width := 0
@@ -119,6 +123,10 @@ func runHeadless(w io.Writer, panels []*panel) bool {
 	close(done)
 
 	mu.Lock()
-	defer mu.Unlock()
+	err := writeErr
+	mu.Unlock()
+	if err != nil {
+		return false
+	}
 	return printSummary(w, panels)
 }
