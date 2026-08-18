@@ -34,11 +34,14 @@ func TestRunHeadless_failure(t *testing.T) {
 	if ok := runHeadless(&buf, []*panel{p}); ok {
 		t.Fatalf("runHeadless = true for failing panel\n%s", buf.String())
 	}
-	if p.status != "failed" {
-		t.Errorf("status = %q, want failed", p.status)
+	p.mu.RLock()
+	status, exitCode := p.status, p.exitCode
+	p.mu.RUnlock()
+	if status != "failed" {
+		t.Errorf("status = %q, want failed", status)
 	}
-	if p.exitCode != 3 {
-		t.Errorf("exitCode = %d, want 3", p.exitCode)
+	if exitCode != 3 {
+		t.Errorf("exitCode = %d, want 3", exitCode)
 	}
 	if out := buf.String(); !strings.Contains(out, "(exit 3)") {
 		t.Errorf("missing exit code in output:\n%s", out)
