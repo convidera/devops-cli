@@ -30,6 +30,7 @@ test:
 `)
 	write("backend/.devops/agents.yaml", `
 test:
+  description: Backend tests
   host:
     - script: echo agent-backend-test "$@" >> "`+logFile+`"
       priority: 10
@@ -233,5 +234,54 @@ func TestPanelCommand_agentsSubcommand(t *testing.T) {
 	}
 	if got := panelCommand("/bin/devops", nil, "api", "test", nil); got != `'/bin/devops' 'api' 'test'` {
 		t.Errorf("panelCommand without subcommand = %q", got)
+	}
+}
+
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := os.Stdout
+	os.Stdout = w
+	defer func() { os.Stdout = orig }()
+	fn()
+	_ = w.Close()
+	out, _ := io.ReadAll(r)
+	return string(out)
+}
+
+func TestVersion_allowedInAgentMode(t *testing.T) {
+	setAgentEnv(t, "1", "")
+	for _, arg := range []string{"version", "--version"} {
+		var code int
+		out := captureStdout(t, func() { code = run([]string{arg}) })
+		if code != 0 || out != version+"\n" {
+			t.Errorf("%s: exit = %d, stdout = %q", arg, code, out)
+		}
+	}
+}
+
+func TestRunAgents_statusLinesOnStderr(t *testing.T) {
+	setupAgentRepo(t)
+	setAgentEnv(t, "1", "")
+	var stdout string
+	stderr := captureStderr(t, func() {
+		stdout = captureStdout(t, func() { run([]string{"agents", "backend", "lint"}) })
+	})
+	if stdout != "" {
+		t.Errorf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, `Running "lint" for module backend`) || !strings.Contains(stderr, "Executing: ") {
+		t.Errorf("stderr = %q", stderr)
+	}
+}
+
+func TestShowAgentsHelp_descriptions(t *testing.T) {
+	setupAgentRepo(t)
+	out := captureStdout(t, showAgentsHelp)
+	if !strings.Contains(out, "    - lint\n    - test  Backend tests\n") {
+		t.Errorf("help = %q", out)
 	}
 }

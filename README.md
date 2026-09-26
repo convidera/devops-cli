@@ -118,6 +118,7 @@ devops <module> exec [cmd...]      Open interactive shell in module's container
 devops <module> shell              Alias for exec
 devops agents <command>            Run an agent command (see Agent commands)
 devops help                        Show this help
+devops version                     Print the version
 devops reinstall                   Download and install the latest release
 ```
 
@@ -147,6 +148,7 @@ AI agents get a separate command surface in `.devops/agents.yaml` (same schema a
 **backend/.devops/agents.yaml**
 ```yaml
 test:
+  description: PHPUnit in app
   app:
     - php artisan test
 ```
@@ -159,7 +161,7 @@ devops agents <module> <command>    Run an agent command for one module
 
 Unknown agent commands are an error; they never fall through to docker compose.
 
-Agent mode is on when `DEVOPS_AGENT=1`, or when `CLAUDECODE=1` (set by Claude Code) and `DEVOPS_AGENT` is unset. `DEVOPS_AGENT=0` turns it off. In agent mode, everything except `devops agents ...` and `devops help` exits with code 2, and parallel output is always plain (no TUI). Outside agent mode, `devops agents ...` still works so you can try it.
+Agent mode is on when `DEVOPS_AGENT=1`, or when `CLAUDECODE=1` (set by Claude Code) and `DEVOPS_AGENT` is unset. `DEVOPS_AGENT=0` turns it off. In agent mode, everything except `devops agents ...`, `devops help` and `devops version` exits with code 2, and parallel output is always plain (no TUI). Outside agent mode, `devops agents ...` still works so you can try it.
 
 ## Parallel TUI
 
@@ -213,3 +215,14 @@ setup:
 ```
 
 A command can target multiple containers; they run in the order they appear in the file.
+
+An optional `description` string next to the containers is shown by `devops help` / `devops agents help` and is not treated as a container:
+
+```yaml
+test:
+  description: PHPUnit in app-test
+  app-test:
+    - php artisan test
+```
+
+devops's own status lines (`Running ...`, `=== [module] ===`, `Executing: ...`) go to stderr, so stdout carries only the command output (e.g. `devops agents tinker --execute=... > out.txt`). If stdout is closed early (`devops agents routes | head`), devops exits quietly with the command's exit code.

@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -98,5 +99,51 @@ func TestRunModuleSequential_stopsOnFailure(t *testing.T) {
 
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
 		t.Errorf("marker file should not exist, later entry ran despite earlier failure")
+	}
+}
+
+func TestPipeClosed(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = w.Close() }()
+	if pipeClosed(w) {
+		t.Error("pipeClosed = true with reader open")
+	}
+	_ = r.Close()
+	if !pipeClosed(w) {
+		t.Error("pipeClosed = false after reader closed")
+	}
+}
+
+func TestBrokenPipe(t *testing.T) {
+	err := exec.Command("sh", "-c", "kill -PIPE $$").Run()
+	if code, ok := brokenPipe(err); !ok || code != 141 {
+		t.Errorf("SIGPIPE: brokenPipe = %d, %v; want 141, true", code, ok)
+	}
+	err = exec.Command("sh", "-c", "exit 3").Run()
+	if _, ok := brokenPipe(err); ok {
+		t.Error("exit 3 with open stdout treated as broken pipe")
+	}
+	if _, ok := brokenPipe(nil); ok {
+		t.Error("nil error treated as broken pipe")
+	}
+}
+
+// TestBrokenPipe_closedStdout covers `docker compose exec`, which exits 255
+// instead of dying from SIGPIPE when its stdout goes away.
+func TestBrokenPipe_closedStdout(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = r.Close()
+	orig := os.Stdout
+	os.Stdout = w
+	defer func() { os.Stdout = orig; _ = w.Close() }()
+	err = exec.Command("sh", "-c", "exit 255").Run()
+	if code, ok := brokenPipe(err); !ok || code != 255 {
+		t.Errorf("brokenPipe = %d, %v; want 255, true", code, ok)
 	}
 }
