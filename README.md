@@ -143,6 +143,8 @@ devops ps
 
 ## Agent commands
 
+To make a project agent-ready end to end (compose, `agents.yaml`, `AGENTS.md`), follow [docs/agent-ready.md](docs/agent-ready.md).
+
 AI agents get a separate command surface in `.devops/agents.yaml` (same schema as `commands.yaml`, priority included). Keep it to commands that work in a sandbox — no `mkcert -install`, `/etc/hosts` edits, secret decryption or TTY prompts. A module may have only an `agents.yaml`.
 
 **backend/.devops/agents.yaml**
