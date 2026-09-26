@@ -18,6 +18,9 @@ jobs:
           - goos: linux
             goarch: amd64
             artifact: devops-linux-amd64
+          - goos: linux
+            goarch: arm64
+            artifact: devops-linux-arm64
           - goos: darwin
             goarch: amd64
             artifact: devops-darwin-amd64
