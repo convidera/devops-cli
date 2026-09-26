@@ -14,11 +14,11 @@ func main() {
 
 func run(args []string) int {
 	if agentMode() {
-		if len(args) == 0 || isHelpArg(args[0]) {
+		if len(args) > 0 && isHelpArg(args[0]) {
 			showAgentsHelp()
 			return 0
 		}
-		if args[0] != "agents" {
+		if len(args) == 0 || args[0] != "agents" {
 			return agentBlocked()
 		}
 	}
