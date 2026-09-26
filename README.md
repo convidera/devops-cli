@@ -116,6 +116,7 @@ devops <module> <command>          Run command for a specific module
 devops all <command>               Run command across all modules (explicit)
 devops <module> exec [cmd...]      Open interactive shell in module's container
 devops <module> shell              Alias for exec
+devops agents <command>            Run an agent command (see Agent commands)
 devops help                        Show this help
 devops reinstall                   Download and install the latest release
 ```
@@ -138,6 +139,27 @@ devops backend exec php artisan tinker
 # Fall through to docker compose if no module defines the command
 devops ps
 ```
+
+## Agent commands
+
+AI agents get a separate command surface in `.devops/agents.yaml` (same schema as `commands.yaml`, priority included). Keep it to commands that work in a sandbox — no `mkcert -install`, `/etc/hosts` edits, secret decryption or TTY prompts. A module may have only an `agents.yaml`.
+
+**backend/.devops/agents.yaml**
+```yaml
+test:
+  app:
+    - php artisan test
+```
+
+```
+devops agents                       List agent commands per module
+devops agents <command> [args]      Run an agent command across all modules
+devops agents <module> <command>    Run an agent command for one module
+```
+
+Unknown agent commands are an error; they never fall through to docker compose.
+
+Agent mode is on when `DEVOPS_AGENT=1`, or when `CLAUDECODE=1` (set by Claude Code) and `DEVOPS_AGENT` is unset. `DEVOPS_AGENT=0` turns it off. In agent mode, everything except `devops agents ...` and `devops help` exits with code 2, and parallel output is always plain (no TUI). Outside agent mode, `devops agents ...` still works so you can try it.
 
 ## Parallel TUI
 

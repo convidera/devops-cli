@@ -53,6 +53,9 @@ type Module struct {
 	Name   string
 	Path   string
 	Config CommandConfig
+	// Agents holds the commands from .devops/agents.yaml, if present.
+	Agents     CommandConfig
+	AgentsPath string
 }
 
 // effectivePriority is the lowest priority value across all entries for a command.
@@ -82,23 +85,24 @@ func (m *Module) firstContainer() string {
 	return ""
 }
 
-// discoverModules finds all .devops/commands.yaml files up to 3 levels deep.
+// discoverModules finds all .devops directories containing commands.yaml
+// and/or agents.yaml, up to 3 levels deep.
 func discoverModules() ([]*Module, error) {
 	var modules []*Module
 
-	if _, err := os.Stat(".devops/commands.yaml"); err == nil {
-		m, err := loadModule("root", ".devops/commands.yaml")
-		if err != nil {
-			return nil, fmt.Errorf("root: %w", err)
-		}
-		modules = append(modules, m)
+	root, err := loadModuleDir("root", ".devops")
+	if err != nil {
+		return nil, fmt.Errorf("root: %w", err)
+	}
+	if root != nil {
+		modules = append(modules, root)
 	}
 
 	var candidates []string
 	for _, pattern := range []string{
-		"*/.devops/commands.yaml",
-		"*/*/.devops/commands.yaml",
-		"*/*/*/.devops/commands.yaml",
+		"*/.devops",
+		"*/*/.devops",
+		"*/*/*/.devops",
 	} {
 		matches, err := filepath.Glob(pattern)
 		if err != nil {
@@ -107,13 +111,15 @@ func discoverModules() ([]*Module, error) {
 		candidates = append(candidates, matches...)
 	}
 
-	for _, path := range candidates {
-		name := moduleNameFromPath(path)
-		m, err := loadModule(name, path)
+	for _, dir := range candidates {
+		name := moduleNameFromPath(dir)
+		m, err := loadModuleDir(name, dir)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", name, err)
 		}
-		modules = append(modules, m)
+		if m != nil {
+			modules = append(modules, m)
+		}
 	}
 
 	return modules, nil
@@ -123,14 +129,56 @@ func moduleNameFromPath(path string) string {
 	path = filepath.ToSlash(path)
 	parts := strings.Split(path, "/")
 	for _, p := range parts {
-		if p != "." && p != ".devops" && p != "commands.yaml" && p != "" {
+		if p != "." && p != ".devops" && p != "commands.yaml" && p != "agents.yaml" && p != "" {
 			return p
 		}
 	}
 	return path
 }
 
+// loadModuleDir loads commands.yaml and agents.yaml from a .devops directory.
+// It returns nil if neither file exists.
+func loadModuleDir(name, dir string) (*Module, error) {
+	commandsPath := filepath.Join(dir, "commands.yaml")
+	agentsPath := filepath.Join(dir, "agents.yaml")
+	hasCommands, hasAgents := fileExists(commandsPath), fileExists(agentsPath)
+	if !hasCommands && !hasAgents {
+		return nil, nil
+	}
+
+	m := &Module{Name: name, Path: commandsPath}
+	if hasCommands {
+		loaded, err := loadModule(name, commandsPath)
+		if err != nil {
+			return nil, err
+		}
+		m = loaded
+	}
+	if hasAgents {
+		cfg, err := loadConfig(agentsPath)
+		if err != nil {
+			return nil, fmt.Errorf("agents.yaml: %w", err)
+		}
+		m.Agents = cfg
+		m.AgentsPath = agentsPath
+	}
+	return m, nil
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
 func loadModule(name, path string) (*Module, error) {
+	cfg, err := loadConfig(path)
+	if err != nil {
+		return nil, err
+	}
+	return &Module{Name: name, Path: path, Config: cfg}, nil
+}
+
+func loadConfig(path string) (CommandConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -139,7 +187,19 @@ func loadModule(name, path string) (*Module, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, err
 	}
-	return &Module{Name: name, Path: path, Config: cfg}, nil
+	return cfg, nil
+}
+
+// agentModules returns a view of modules whose Config is their agents.yaml,
+// so the regular runner executes agent commands unchanged.
+func agentModules(modules []*Module) []*Module {
+	var out []*Module
+	for _, m := range modules {
+		if len(m.Agents) > 0 {
+			out = append(out, &Module{Name: m.Name, Path: m.AgentsPath, Config: m.Agents})
+		}
+	}
+	return out
 }
 
 // findModulesForCommand returns modules that define the given command, sorted

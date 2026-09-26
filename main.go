@@ -9,51 +9,71 @@ import (
 )
 
 func main() {
-	args := os.Args[1:]
+	os.Exit(run(os.Args[1:]))
+}
+
+func run(args []string) int {
+	if agentMode() {
+		if len(args) > 0 && isHelpArg(args[0]) {
+			showAgentsHelp()
+			return 0
+		}
+		if len(args) == 0 || args[0] != "agents" {
+			return agentBlocked()
+		}
+	}
 
 	if len(args) == 0 {
 		showHelp()
-		return
+		return 0
 	}
 
 	switch args[0] {
 	case "help", "--help", "-h":
 		showHelp()
-		return
+		return 0
+	case "agents":
+		return runAgents(args[1:])
 	case "all":
 		if len(args) < 2 {
 			fmt.Fprintln(os.Stderr, "Usage: devops all <command>")
-			os.Exit(1)
+			return 1
 		}
-		os.Exit(runAllCommand(args[1], args[2:]))
+		return runAllCommand(args[1], args[2:])
 	case "reinstall":
-		os.Exit(runReinstall())
+		return runReinstall()
 	}
 
 	modules, err := discoverModules()
 	if err != nil {
-		fatalf("error discovering modules: %v", err)
+		fmt.Fprintf(os.Stderr, "error: error discovering modules: %v\n", err)
+		return 1
 	}
 
 	// Is the first argument a known module name?
 	if m := findModule(modules, args[0]); m != nil {
 		if len(args) < 2 {
 			fmt.Fprintf(os.Stderr, "Usage: devops %s <command>\n", args[0])
-			os.Exit(1)
+			return 1
 		}
 		switch args[1] {
 		case "exec", "shell":
 			if err := runExec(m, args[2:]); err != nil {
-				fatalf("%v", err)
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				return 1
 			}
+			return 0
 		default:
-			os.Exit(runSingleModuleCommand(m, args[1], args[2:]))
+			return runSingleModuleCommand(m, args[1], args[2:])
 		}
-		return
 	}
 
 	// Otherwise treat first argument as a command and run across all modules.
-	os.Exit(runAllCommand(args[0], args[1:]))
+	return runAllCommand(args[0], args[1:])
+}
+
+func isHelpArg(arg string) bool {
+	return arg == "help" || arg == "--help" || arg == "-h"
 }
 
 // runAllCommand runs command across all modules that define it, respecting
@@ -65,8 +85,7 @@ func runAllCommand(command string, extraArgs []string) int {
 		return 1
 	}
 
-	found := findModulesForCommand(modules, command)
-	if len(found) == 0 {
+	if len(findModulesForCommand(modules, command)) == 0 {
 		fmt.Fprintf(os.Stderr, "No mapping found for command: %s, passing to docker compose...\n", command)
 		cmd := exec.Command("docker", append([]string{"compose", command}, extraArgs...)...)
 		cmd.Stdin = os.Stdin
@@ -78,6 +97,14 @@ func runAllCommand(command string, extraArgs []string) int {
 		return 0
 	}
 
+	return runAcross(modules, nil, command, extraArgs)
+}
+
+// runAcross runs command across the given modules by priority group.
+// subcommand is inserted before the module name when re-invoking the binary
+// for parallel groups (e.g. "agents").
+func runAcross(modules []*Module, subcommand []string, command string, extraArgs []string) int {
+	found := findModulesForCommand(modules, command)
 	fmt.Printf("Running %q across %d module(s)...\n\n", command, len(found))
 
 	for _, group := range groupByPriority(found, command) {
@@ -90,7 +117,7 @@ func runAllCommand(command string, extraArgs []string) int {
 			}
 			fmt.Println()
 		} else {
-			if !runGroupParallel(group, command, extraArgs) {
+			if !runGroupParallel(group, subcommand, command, extraArgs) {
 				return 1
 			}
 			fmt.Println()
@@ -119,14 +146,19 @@ func runSingleModuleCommand(m *Module, command string, extraArgs []string) int {
 // the TUI when a terminal is attached, as prefixed log output otherwise.
 // It calls the binary itself as a subprocess per module so each module's full
 // execution logic (multiple containers, multiple scripts) runs inside a panel.
-func runGroupParallel(modules []*Module, command string, extraArgs []string) bool {
+func runGroupParallel(modules []*Module, subcommand []string, command string, extraArgs []string) bool {
 	self := selfPath()
 	var panels []*panel
 	for _, m := range modules {
-		parts := append([]string{self, m.Name, command}, extraArgs...)
-		panels = append(panels, newPanel(m.Name, shellJoin(parts)))
+		panels = append(panels, newPanel(m.Name, panelCommand(self, subcommand, m.Name, command, extraArgs)))
 	}
 	return runPanels(panels)
+}
+
+func panelCommand(self string, subcommand []string, module, command string, extraArgs []string) string {
+	parts := append([]string{self}, subcommand...)
+	parts = append(parts, module, command)
+	return shellJoin(append(parts, extraArgs...))
 }
 
 // shellJoin builds a shell-safe command string by single-quoting each argument.
@@ -159,17 +191,28 @@ func showHelp() {
 	fmt.Println("  devops all <command>               Run command across all modules (explicit)")
 	fmt.Println("  devops <module> exec [cmd...]      Open interactive shell in module's container")
 	fmt.Println("  devops <module> shell              Alias for exec")
+	fmt.Println("  devops agents <command>            Run an agent command (see: devops agents help)")
 	fmt.Println("  devops help                        Show this help")
 	fmt.Println("  devops reinstall                   Download and install the latest release")
 	fmt.Println()
 
-	if len(modules) == 0 {
+	var withCommands []*Module
+	for _, m := range modules {
+		if len(m.Config) > 0 {
+			withCommands = append(withCommands, m)
+		}
+	}
+	if len(withCommands) == 0 {
 		fmt.Println("No modules found (no .devops/commands.yaml files discovered).")
 		return
 	}
 
 	fmt.Println("Available modules and commands:")
 	fmt.Println()
+	printModuleCommands(withCommands)
+}
+
+func printModuleCommands(modules []*Module) {
 	for _, m := range modules {
 		fmt.Printf("  [%s]\n", m.Name)
 		for _, cmd := range allCommands([]*Module{m}) {
@@ -177,9 +220,4 @@ func showHelp() {
 		}
 		fmt.Println()
 	}
-}
-
-func fatalf(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, "error: "+format+"\n", args...)
-	os.Exit(1)
 }
