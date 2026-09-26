@@ -1,0 +1,19 @@
+# backend/.devops/agents.yaml
+#
+# Commands AI agents may run via `devops agents <command>`. Same schema as
+# commands.yaml; only list what works in a sandbox (no TTY prompts, no host
+# setup like mkcert -install or /etc/hosts edits, no secret decryption).
+
+test:
+  app:
+    - php artisan test
+
+lint:
+  app:
+    - ./vendor/bin/phpcs
+    - ./vendor/bin/phpstan analyse
+
+migrate:
+  app:
+    - script: php artisan migrate --force
+      priority: 10

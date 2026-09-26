@@ -23,6 +23,9 @@ const noTUIEnv = "DEVOPS_NO_TUI"
 // controlling terminal) with "could not open a new TTY". Detect that up front
 // so the caller can fall back to plain logging instead of erroring out.
 func canUseTUI() bool {
+	if agentMode() {
+		return false
+	}
 	if v := os.Getenv(noTUIEnv); v != "" && v != "0" {
 		return false
 	}
