@@ -5,10 +5,12 @@
 # setup like mkcert -install or /etc/hosts edits, no secret decryption).
 
 test:
+  description: PHPUnit in app
   app:
     - php artisan test
 
 lint:
+  description: PHP_CodeSniffer and PHPStan
   app:
     - ./vendor/bin/phpcs
     - ./vendor/bin/phpstan analyse

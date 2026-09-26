@@ -8,11 +8,19 @@ import (
 	"strings"
 )
 
+// version is set at release time via -ldflags "-X main.version=<tag>".
+var version = "dev"
+
 func main() {
 	os.Exit(run(os.Args[1:]))
 }
 
 func run(args []string) int {
+	if len(args) > 0 && (args[0] == "version" || args[0] == "--version") {
+		fmt.Println(version)
+		return 0
+	}
+
 	if agentMode() {
 		if len(args) > 0 && isHelpArg(args[0]) {
 			showAgentsHelp()
@@ -105,26 +113,26 @@ func runAllCommand(command string, extraArgs []string) int {
 // for parallel groups (e.g. "agents").
 func runAcross(modules []*Module, subcommand []string, command string, extraArgs []string) int {
 	found := findModulesForCommand(modules, command)
-	fmt.Printf("Running %q across %d module(s)...\n\n", command, len(found))
+	fmt.Fprintf(os.Stderr, "Running %q across %d module(s)...\n\n", command, len(found))
 
 	for _, group := range groupByPriority(found, command) {
 		if len(group) == 1 {
 			m := group[0]
-			fmt.Printf("=== [%s] ===\n", m.Name)
+			fmt.Fprintf(os.Stderr, "=== [%s] ===\n", m.Name)
 			if err := runModuleSequential(m, command, extraArgs); err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				return 1
 			}
-			fmt.Println()
+			fmt.Fprintln(os.Stderr)
 		} else {
 			if !runGroupParallel(group, subcommand, command, extraArgs) {
 				return 1
 			}
-			fmt.Println()
+			fmt.Fprintln(os.Stderr)
 		}
 	}
 
-	fmt.Printf("Completed %q across all modules.\n", command)
+	fmt.Fprintf(os.Stderr, "Completed %q across all modules.\n", command)
 	return 0
 }
 
@@ -134,7 +142,7 @@ func runSingleModuleCommand(m *Module, command string, extraArgs []string) int {
 		fmt.Fprintf(os.Stderr, "Command %q not defined in module %s\n", command, m.Name)
 		return 1
 	}
-	fmt.Printf("Running %q for module %s...\n\n", command, m.Name)
+	fmt.Fprintf(os.Stderr, "Running %q for module %s...\n\n", command, m.Name)
 	if err := runModuleSequential(m, command, extraArgs); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -193,6 +201,7 @@ func showHelp() {
 	fmt.Println("  devops <module> shell              Alias for exec")
 	fmt.Println("  devops agents <command>            Run an agent command (see: devops agents help)")
 	fmt.Println("  devops help                        Show this help")
+	fmt.Println("  devops version                     Print the version")
 	fmt.Println("  devops reinstall                   Download and install the latest release")
 	fmt.Println()
 
@@ -215,8 +224,17 @@ func showHelp() {
 func printModuleCommands(modules []*Module) {
 	for _, m := range modules {
 		fmt.Printf("  [%s]\n", m.Name)
-		for _, cmd := range allCommands([]*Module{m}) {
-			fmt.Printf("    - %s\n", cmd)
+		cmds := allCommands([]*Module{m})
+		width := 0
+		for _, cmd := range cmds {
+			width = max(width, len(cmd))
+		}
+		for _, cmd := range cmds {
+			if desc := m.Descriptions[cmd]; desc != "" {
+				fmt.Printf("    - %-*s  %s\n", width, cmd, desc)
+			} else {
+				fmt.Printf("    - %s\n", cmd)
+			}
 		}
 		fmt.Println()
 	}

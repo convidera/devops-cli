@@ -48,14 +48,20 @@ func (e *Entry) UnmarshalYAML(value *yaml.Node) error {
 // CommandConfig: command → container → []Entry
 type CommandConfig map[string]map[string][]Entry
 
+// descriptionKey is a reserved key at the container level holding a
+// command's help text instead of a container.
+const descriptionKey = "description"
+
 // Module is a discovered module with its parsed config.
 type Module struct {
-	Name   string
-	Path   string
-	Config CommandConfig
+	Name         string
+	Path         string
+	Config       CommandConfig
+	Descriptions map[string]string
 	// Agents holds the commands from .devops/agents.yaml, if present.
-	Agents     CommandConfig
-	AgentsPath string
+	Agents            CommandConfig
+	AgentDescriptions map[string]string
+	AgentsPath        string
 }
 
 // effectivePriority is the lowest priority value across all entries for a command.
@@ -155,11 +161,12 @@ func loadModuleDir(name, dir string) (*Module, error) {
 		m = loaded
 	}
 	if hasAgents {
-		cfg, err := loadConfig(agentsPath)
+		cfg, descs, err := loadConfig(agentsPath)
 		if err != nil {
 			return nil, fmt.Errorf("agents.yaml: %w", err)
 		}
 		m.Agents = cfg
+		m.AgentDescriptions = descs
 		m.AgentsPath = agentsPath
 	}
 	return m, nil
@@ -171,23 +178,41 @@ func fileExists(path string) bool {
 }
 
 func loadModule(name, path string) (*Module, error) {
-	cfg, err := loadConfig(path)
+	cfg, descs, err := loadConfig(path)
 	if err != nil {
 		return nil, err
 	}
-	return &Module{Name: name, Path: path, Config: cfg}, nil
+	return &Module{Name: name, Path: path, Config: cfg, Descriptions: descs}, nil
 }
 
-func loadConfig(path string) (CommandConfig, error) {
+// loadConfig parses a commands/agents file, splitting off each command's
+// optional scalar `description` so it is not treated as a container.
+func loadConfig(path string) (CommandConfig, map[string]string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	var cfg CommandConfig
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, err
+	var raw map[string]map[string]yaml.Node
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		return nil, nil, err
 	}
-	return cfg, nil
+	cfg := CommandConfig{}
+	descs := map[string]string{}
+	for command, containers := range raw {
+		cfg[command] = map[string][]Entry{}
+		for container, node := range containers {
+			if container == descriptionKey && node.Kind == yaml.ScalarNode {
+				descs[command] = node.Value
+				continue
+			}
+			var entries []Entry
+			if err := node.Decode(&entries); err != nil {
+				return nil, nil, err
+			}
+			cfg[command][container] = entries
+		}
+	}
+	return cfg, descs, nil
 }
 
 // agentModules returns a view of modules whose Config is their agents.yaml,
@@ -196,7 +221,7 @@ func agentModules(modules []*Module) []*Module {
 	var out []*Module
 	for _, m := range modules {
 		if len(m.Agents) > 0 {
-			out = append(out, &Module{Name: m.Name, Path: m.AgentsPath, Config: m.Agents})
+			out = append(out, &Module{Name: m.Name, Path: m.AgentsPath, Config: m.Agents, Descriptions: m.AgentDescriptions})
 		}
 	}
 	return out

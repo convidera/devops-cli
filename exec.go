@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -8,6 +9,7 @@ import (
 	"strings"
 	"syscall"
 
+	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 )
 
@@ -20,9 +22,9 @@ func runModuleSequential(m *Module, command string, extraArgs []string) error {
 		return fmt.Errorf("command %q not found in module %s", command, m.Name)
 	}
 	for container, entries := range containers {
-		fmt.Printf("Running commands for: %s\n", container)
+		fmt.Fprintf(os.Stderr, "Running commands for: %s\n", container)
 		for _, entry := range entries {
-			fmt.Printf("Executing: %s\n", entry.Script)
+			fmt.Fprintf(os.Stderr, "Executing: %s\n", entry.Script)
 		}
 		if err := runScript(container, joinEntries(entries), extraArgs); err != nil {
 			return fmt.Errorf("[%s/%s] command failed: %w", m.Name, container, err)
@@ -138,5 +140,31 @@ func runWithSignalForwarding(cmd *exec.Cmd) error {
 
 	err := cmd.Wait()
 	close(done)
+	if code, ok := brokenPipe(err); ok {
+		os.Exit(code)
+	}
 	return err
+}
+
+// brokenPipe reports whether a failed child stopped because our stdout was
+// closed (e.g. `devops agents artisan route:list | head`) and the code to exit
+// with quietly. `docker compose exec` reports that as exit 255, so the pipe
+// itself is checked rather than only the child's status.
+func brokenPipe(err error) (int, bool) {
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return 0, false
+	}
+	code := exitErr.ExitCode()
+	if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok && ws.Signaled() && ws.Signal() == syscall.SIGPIPE {
+		code = 128 + int(syscall.SIGPIPE)
+	}
+	return code, code == 128+int(syscall.SIGPIPE) || pipeClosed(os.Stdout)
+}
+
+// pipeClosed reports whether f is a pipe or socket whose reader has gone away.
+func pipeClosed(f *os.File) bool {
+	fds := []unix.PollFd{{Fd: int32(f.Fd()), Events: unix.POLLOUT}}
+	n, err := unix.Poll(fds, 0)
+	return err == nil && n > 0 && fds[0].Revents&(unix.POLLERR|unix.POLLHUP) != 0
 }

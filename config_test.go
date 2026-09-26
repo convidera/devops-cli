@@ -195,6 +195,7 @@ func TestLoadModule(t *testing.T) {
 	dir := t.TempDir()
 	content := `
 test:
+  description: PHPUnit in app
   app:
     - php artisan test
 migrate:
@@ -214,8 +215,11 @@ migrate:
 	if m.Name != "mymodule" {
 		t.Errorf("Name = %q", m.Name)
 	}
-	if len(m.Config["test"]["app"]) != 1 {
-		t.Errorf("test entries = %d", len(m.Config["test"]["app"]))
+	if len(m.Config["test"]) != 1 || len(m.Config["test"]["app"]) != 1 {
+		t.Errorf("test containers = %v", m.Config["test"])
+	}
+	if m.Descriptions["test"] != "PHPUnit in app" || m.Descriptions["migrate"] != "" {
+		t.Errorf("Descriptions = %v", m.Descriptions)
 	}
 	if m.Config["migrate"]["app"][0].Priority != 10 {
 		t.Errorf("migrate priority = %d", m.Config["migrate"]["app"][0].Priority)
