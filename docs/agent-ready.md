@@ -168,7 +168,8 @@ revealed before the agent's first turn -- never the project's regular
 ```bash
 SECRETS_DIR=.agent-secrets git secret init
 SECRETS_DIR=.agent-secrets git secret tell agents@convidera.com
-SECRETS_DIR=.agent-secrets SECRETS_EXTENSION=.agent.secret git secret hide <path>   # e.g. auth.json
+SECRETS_DIR=.agent-secrets git secret add <path>   # e.g. auth.json
+SECRETS_DIR=.agent-secrets SECRETS_EXTENSION=.agent.secret git secret hide
 ```
 
 - **Always pass `SECRETS_EXTENSION=.agent.secret`** when hiding. git-secret's
