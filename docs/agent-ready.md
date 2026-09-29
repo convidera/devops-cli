@@ -1,6 +1,6 @@
 # Make a project agent-ready
 
-You are preparing a Convidera Docker Compose project so Claude Code agents on our Kubernetes runners can start it, test it and click through it without help or workarounds. Human developers must see no change. Open one PR with the changes. Trax (convidera/t-rax2, `.devops/agents.yaml` and `AGENTS.md`) is the reference implementation; read it before you start.
+You are preparing a Convidera Docker Compose project so Claude Code agents on our Kubernetes runners can start it, test it and click through it without help or workarounds. Human developers must see no change. Open one PR with the changes. Trax (convidera/t-rax2, `.devops/agents.yaml` and `AGENTS.md`) is the reference implementation; read it before you start -- including its `.agent-secrets/` setup (step 9) for `auth.json`, if your project also needs a real secret to bootstrap.
 
 ## What the runner gives you
 
@@ -12,11 +12,11 @@ Design for exactly this environment; don't try to change it from the project.
 | Docker | dind sidecar via `DOCKER_HOST`; `/workspace` is shared, so bind mounts work. userns-remap: **container root = the agent's UID**, other container users map to foreign UIDs |
 | Registry | Docker Hub pulls go through an in-cluster pull-through mirror (logged in read-only) |
 | Network | Egress on 80, 443 and 22; published ports answer on `127.0.0.1` in the session |
-| Tools | `devops` CLI (agent mode), docker compose + buildx, mkcert (no CA install), yq, jq, gh, node 22, git-secret without keys |
+| Tools | `devops` CLI (agent mode), docker compose + buildx, mkcert (no CA install), yq, jq, gh, node 22, git-secret (no key for the project's regular `.gitsecret` store; see "`.agent-secrets/`" below for the opt-in exception) |
 | Browser | Playwright MCP, headless Chromium: `*.test` → 127.0.0.1, HTTPS errors ignored. The shell can't resolve `*.test`; use `curl -k --resolve host:443:127.0.0.1` |
 | devops CLI | v0.0.10+. With `CLAUDECODE=1`/`DEVOPS_AGENT=1` it only runs `devops agents <cmd>` from `.devops/agents.yaml`; everything else exits 2. Its own status lines go to stderr |
 | Session start | If `.devops/agents.yaml` exists, the hook runs `devops agents bootstrap` in the background → log `/tmp/devops-agents-bootstrap.log`, exit code in `/tmp/devops-agents-bootstrap.done` |
-| Secrets | None. Agents only ever use `.env.example` placeholders |
+| Secrets | None by default -- agents only ever use `.env.example` placeholders. A project can opt specific non-prod files into `.agent-secrets/` if it genuinely can't bootstrap without them; see step 9 |
 
 ## Done means
 
@@ -90,7 +90,7 @@ Rules for entries:
 - Give every command a `description:` with its arguments and rough duration; `devops agents help` shows it.
 - Use `host` entries with `docker compose exec -T` or `run --rm -T`, never interactive forms.
 - Pass arguments as `sh -c '… "$@"' sh "$@"`, never `sh -c "… $@"`, which splits multiple arguments.
-- No `mkcert -install`, `/etc/hosts`, `git secret reveal`, sudo or prompts.
+- No `mkcert -install`, `/etc/hosts`, `git secret reveal`, sudo or prompts. This holds even if the project uses `.agent-secrets/` (step 9): reveal happens automatically in a SessionStart hook, never as an `agents.yaml` command.
 - Fail loudly. A test filter that matches nothing must fail, and don't swallow errors with `2>/dev/null`.
 
 ### 5. `.devops/agents/bootstrap.sh`
@@ -146,7 +146,7 @@ exec "$(dirname "$0")/.devops/devops-legacy.sh" "$@"
 - The command list with example arguments and rough durations.
 - How to wait for the hook: the `.done` file, or the log ending in `Completed` or `command failed`.
 - Access: the URL in the Playwright browser, the curl `--resolve` form, the dev login, and to save screenshots under `/tmp/playwright/`.
-- Gotchas: never decrypt secrets, use `recreate` after `.env` changes, how to reset the DB, and any log noise.
+- Gotchas: never decrypt the regular `.gitsecret` store or ask for GPG keys (if the project uses `.agent-secrets/`, say so and note it's already revealed automatically -- see step 9), use `recreate` after `.env` changes, how to reset the DB, and any log noise.
 
 Keep long findings in the PR description, not in this file.
 
@@ -155,6 +155,42 @@ Keep long findings in the PR description, not in this file.
 - Leave the human `commands.yaml` and scripts alone. Don't add headless `if` branches to them; the agent path lives only in `agents.yaml`.
 - Don't commit `.claude/settings.json` with an `env` block or blanket `Edit`/`Write` allow rules. Don't add a project `.mcp.json` unless it is project-specific.
 - Fix real bugs you find in shared code (for example `$@` quoting in `commands.yaml`) in the same PR, and call them out.
+
+### 9. `.agent-secrets/` for secrets the agent genuinely needs (optional)
+
+Default is still "no secrets" (above): use it only if the project truly
+cannot bootstrap without a real credential (e.g. Composer/npm auth against a
+private registry). The org's shared runner image supports opting specific
+files into a second, independent `git-secret` store that's automatically
+revealed before the agent's first turn -- never the project's regular
+`.gitsecret` store, and never anything you don't explicitly list here.
+
+```bash
+SECRETS_DIR=.agent-secrets git secret init
+SECRETS_DIR=.agent-secrets git secret tell agents@convidera.com
+SECRETS_DIR=.agent-secrets SECRETS_EXTENSION=.agent.secret git secret hide <path>   # e.g. auth.json
+```
+
+- **Always pass `SECRETS_EXTENSION=.agent.secret`** when hiding. git-secret's
+  ciphertext filename (`<path>.secret`) is independent of `SECRETS_DIR` -- a
+  project whose regular `.gitsecret` store already tracks the same path (as
+  Trax's `auth.json` does) would otherwise collide and silently overwrite the
+  wrong store's encrypted blob.
+- Add `.devops/agent-secrets.yaml` with `enabled: true` -- the opt-in marker
+  the SessionStart hook checks for; without it, nothing is revealed even if
+  `.agent-secrets/` exists.
+- The plaintext reveals back to whatever path you `add`ed it from (repo root
+  for `auth.json`, not `.agent-secrets/`) -- pick the path the tooling that
+  needs it (Composer, npm, ...) actually expects, same as any other file.
+- This only works when the environment's `ClaudeRunnerEnvironment` has
+  `agentSecretsKeyRef` set -- an operator-side, cluster-level setting, not
+  something a project PR controls. If it isn't set for your environment yet,
+  ask whoever manages that cluster's operator config.
+- Only put narrow, rotatable, non-production credentials here. The reveal
+  happens inside the same container the agent runs in, so this is a temporal
+  boundary (revealed before the agent's first turn, key wiped immediately
+  after) -- not filesystem isolation.
+- Reference: Trax's `auth.json` (Composer auth for private package repos).
 
 ## Validate before pushing
 - `docker compose config -q` (with a temporary `.env` from `.env.example`), `bash -n` and shellcheck on scripts, and `yq` parses every YAML file.
