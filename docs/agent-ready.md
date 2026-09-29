@@ -34,7 +34,7 @@ In a fresh session, with nothing done by hand:
 Read `.devops/commands.yaml`, `docker-compose.yml`, `.env.example`, the Dockerfiles and entrypoints, the seeders and **the CI workflows**. CI is the closest thing to a headless setup: every `sed`, `cp` or extra env var it needs is a gap agents will hit too. Check whether the repo vendors a legacy bash `./devops`.
 
 ### 2. `.env.example` boots the whole stack
-- No secrets and no manual steps. External services are faked or logged: `MAIL_*=log`, empty Sentry DSN, MinIO or local storage.
+- By default, no secrets and no manual steps; if the project genuinely cannot bootstrap without a real credential, use the `.agent-secrets/` opt-in in step 9. External services are faked or logged: `MAIL_*=log`, empty Sentry DSN, MinIO or local storage.
 - Seeders must not need real mail, APIs or keys.
 - If CI seds values into `.env`, fix the root cause and drop the sed.
 
