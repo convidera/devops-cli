@@ -16,7 +16,7 @@ Design for exactly this environment; don't try to change it from the project.
 | Network | Egress on 80, 443 and 22; published ports answer on `127.0.0.1` in the session |
 | Tools | `devops` CLI (agent mode), docker compose + buildx, mkcert (no CA install), yq, jq, gh, node 22, git-secret (no key for the project's regular `.gitsecret` store; see "`.agent-secrets/`" below for the opt-in exception) |
 | Browser | Playwright MCP, headless Chromium: `*.test` → 127.0.0.1, HTTPS errors ignored. The shell can't resolve `*.test`; use `curl -k --resolve host:443:127.0.0.1` |
-| devops CLI | Built from [convidera/devops-cli](https://github.com/convidera/devops-cli), v0.0.10+, on `PATH`. With `CLAUDECODE=1`/`DEVOPS_AGENT=1` it only runs `devops agents <cmd>` from `.devops/agents.yaml`; everything else exits 2. Its own status lines go to stderr |
+| devops CLI | Built from [convidera/devops-cli](https://github.com/convidera/devops-cli), v0.0.10+, on `PATH` on runners. With `CLAUDECODE=1`/`DEVOPS_AGENT=1` it only runs `devops agents <cmd>` from `.devops/agents.yaml`; everything else exits 2. Its own status lines go to stderr |
 | Session start | If `.devops/agents.yaml` exists, the hook runs `devops agents bootstrap` in the background → log `/tmp/devops-agents-bootstrap.log`, exit code in `/tmp/devops-agents-bootstrap.done` |
 | Secrets | None by default -- agents only ever use `.env.example` placeholders. A project can opt specific non-prod files into `.agent-secrets/` if it genuinely can't bootstrap without them; see step 9 |
 
@@ -154,14 +154,14 @@ echo "Stack is up: https://<project>.test (login: <user> / <password>)"
 If a published port can clash, pick a free one and persist it in `.env` (Trax's `choose_port` helper does this for the Traefik dashboard and DB ports, and skips it when the service is already running); copy it from Trax's `bootstrap.sh`.
 
 ### 6. `./devops` launcher
-The project must not embed the CLI or its commands. Ship this thin launcher as `./devops`: it runs the `devops` from [convidera/devops-cli](https://github.com/convidera/devops-cli) on `PATH` if it is at least `MIN_VERSION`, and otherwise downloads that release for humans (`./devops install` does it explicitly). Agents never download: on a runner without a suitable CLI it exits 127 with "stop and report". Keep `MIN_VERSION` at **v0.0.10 or newer**, the first release with agent mode; bump it when you need a newer CLI.
+The project must not embed the CLI or its commands. Ship this thin launcher as `./devops`: it runs the `devops` from [convidera/devops-cli](https://github.com/convidera/devops-cli) if it is at least `MIN_VERSION`, looking on `PATH` first and then in its own install directory (`~/.local/bin`, override with `DEVOPS_INSTALL_DIR`), and otherwise downloads that release there for humans (`./devops install` does it explicitly). Humans normally go through `./devops`, so the CLI doesn't need to be on their `PATH`; on runners it is on `PATH` from the image. Agents never download: on a runner without a suitable CLI it exits 127 with "stop and report". Keep `MIN_VERSION` at **v0.0.10 or newer**, the first release with agent mode; bump it when you need a newer CLI.
 
 **Legacy `./devops` with embedded commands:** if the project still has the old bash `./devops` that contains the commands themselves, migrate it first. Move every command into `.devops/commands.yaml` (run `devops <cmd>` for each to check it behaves the same), delete the bash logic, and only then replace `./devops` with the launcher. Don't keep the old script as a fallback.
 
 ```bash
 #!/usr/bin/env bash
 # Thin launcher for the devops CLI (https://github.com/convidera/devops-cli).
-# Runs the newest-enough `devops` on PATH; humans get it downloaded if missing.
+# Runs a new-enough `devops` (from PATH or the install dir); humans get it downloaded if missing.
 # `./devops install` installs or upgrades it explicitly.
 set -u
 
@@ -203,7 +203,6 @@ install_cli() {
         rm -f "$tmp"; echo "devops: download failed" >&2; return 1
     fi
     chmod +x "$tmp" && mv "$tmp" "$INSTALL_DIR/devops"
-    case ":$PATH:" in *":$INSTALL_DIR:"*) ;; *) echo "devops: add $INSTALL_DIR to your PATH to use \`devops\` directly." >&2 ;; esac
 }
 
 if [ "${1:-}" = "install" ] && ! is_agent; then
@@ -222,7 +221,7 @@ fi
 exec "$cli" "$@"
 ```
 
-Point humans to `./devops install` (or the CLI's [installation instructions](https://github.com/convidera/devops-cli#installation)) in the project README, and update any docs that describe a project-local installer.
+Point humans to `./devops install` (they can also put the CLI on their `PATH`, see the CLI's [installation instructions](https://github.com/convidera/devops-cli#installation)) in the project README, and update any docs that describe a project-local installer.
 
 ### 7. `AGENTS.md` (under ~50 lines; Claude Code reads it when there is no `CLAUDE.md`)
 - One line on what the project is.
