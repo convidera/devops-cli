@@ -15,7 +15,7 @@ Design for exactly this environment; don't try to change it from the project.
 | Registry | Docker Hub pulls go through an in-cluster pull-through mirror (logged in read-only) |
 | Network | Egress on 80, 443 and 22; published ports answer on `127.0.0.1` in the session |
 | Tools | `devops` CLI (agent mode), docker compose + buildx, mkcert (no CA install), yq, jq, gh, node 22, git-secret (no key for the project's regular `.gitsecret` store; see "`.agent-secrets/`" below for the opt-in exception) |
-| Browser | Playwright MCP, headless Chromium: `*.test` → 127.0.0.1, HTTPS errors ignored. The shell can't resolve `*.test`; use `curl -k --resolve host:443:127.0.0.1` |
+| Browser | Playwright MCP, headless Chromium: `*.test` and `*.dev` → 127.0.0.1, HTTPS errors ignored. The shell can't resolve either; use `curl -k --resolve host:443:127.0.0.1` |
 | devops CLI | Built from [convidera/devops-cli](https://github.com/convidera/devops-cli), v0.0.10+, on `PATH` on runners. With `CLAUDECODE=1`/`DEVOPS_AGENT=1` it only runs `devops agents <cmd>` from `.devops/agents.yaml`; everything else exits 2. Its own status lines go to stderr |
 | Session start | If `.devops/agents.yaml` exists, the hook runs `devops agents bootstrap` in the background → log `/tmp/devops-agents-bootstrap.log`, exit code in `/tmp/devops-agents-bootstrap.done` |
 | Secrets | None by default -- agents only ever use `.env.example` placeholders. A project can opt specific non-prod files into `.agent-secrets/` if it genuinely can't bootstrap without them; see step 9 |
