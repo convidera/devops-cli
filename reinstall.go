@@ -66,6 +66,8 @@ func releaseAsset(goos, goarch string) (string, bool) {
 	switch goos + "/" + goarch {
 	case "linux/amd64":
 		return "devops-linux-amd64", true
+	case "linux/arm64":
+		return "devops-linux-arm64", true
 	case "darwin/amd64":
 		return "devops-darwin-amd64", true
 	case "darwin/arm64":
