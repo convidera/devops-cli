@@ -132,8 +132,10 @@ func doctorChecks(repo string) []Check {
 	optIn := fileExists(path(".devops", "agent-secrets.yaml"))
 	store := dirExists(path(".agent-secrets"))
 	switch {
-	case optIn && !store:
+	case optIn && !store && secretsOptInEnabled(path(".devops", "agent-secrets.yaml")):
 		add("agent-secrets", levelFail, ".devops/agent-secrets.yaml opts in but .agent-secrets/ does not exist")
+	case optIn && !store:
+		add("agent-secrets", levelWarn, "agent-secrets.yaml has enabled: false and there is no .agent-secrets/")
 	case store && !optIn:
 		add("agent-secrets", levelWarn, ".agent-secrets/ exists without .devops/agent-secrets.yaml, so nothing is revealed")
 	case optIn:
@@ -192,7 +194,7 @@ func checkClaudeSettings(path string, add addFn) {
 	if perms, ok := s["permissions"].(map[string]any); ok {
 		if allow, ok := perms["allow"].([]any); ok {
 			for _, a := range allow {
-				if str, _ := a.(string); str == "Edit" || str == "Write" || str == "Bash" || str == "Bash(*)" {
+				if str, _ := a.(string); str == "*" || str == "Edit" || str == "Write" || str == "Bash" || str == "Bash(*)" {
 					add("claude-settings", levelFail, "blanket allow rule %q is not allowed", str)
 					bad = true
 				}
@@ -202,6 +204,22 @@ func checkClaudeSettings(path string, add addFn) {
 	if !bad {
 		add("claude-settings", levelOK, "valid, no env block or blanket allow rules")
 	}
+}
+
+// secretsOptInEnabled reports whether the marker opts in; an unreadable or
+// unparsable marker counts as enabled so checkSecretsOptIn can report it.
+func secretsOptInEnabled(path string) bool {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return true
+	}
+	var cfg struct {
+		Enabled bool `yaml:"enabled"`
+	}
+	if err := yaml.Unmarshal(b, &cfg); err != nil {
+		return true
+	}
+	return cfg.Enabled
 }
 
 func checkSecretsOptIn(path string, add addFn) {

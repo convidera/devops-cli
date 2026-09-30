@@ -196,3 +196,41 @@ func TestReleaseAssetLinuxArm64(t *testing.T) {
 		t.Errorf("got %q %v", a, ok)
 	}
 }
+
+func TestUniqueModuleNamesRootDevopsStaysDistinct(t *testing.T) {
+	got := uniqueModuleNames([]string{"root/.devops", "other/.devops"})
+	if got[0] == "root" || got[0] == got[1] {
+		t.Errorf("root/.devops must not collide with the reserved root module: %v", got)
+	}
+}
+
+func TestLoadConfigRejectsDuplicates(t *testing.T) {
+	dir := t.TempDir()
+	cases := map[string]string{
+		"command":     "test:\n  host:\n    - a\ntest:\n  host:\n    - b\n",
+		"container":   "test:\n  host:\n    - a\n  host:\n    - b\n",
+		"description": "test:\n  description: a\n  description: b\n  host:\n    - a\n",
+	}
+	for name, body := range cases {
+		writeFile(t, dir, name+".yaml", body)
+		if _, _, _, err := loadConfig(filepath.Join(dir, name+".yaml")); err == nil {
+			t.Errorf("duplicate %s: expected an error", name)
+		}
+	}
+}
+
+func TestDoctorWildcardAndDisabledOptIn(t *testing.T) {
+	repo := t.TempDir()
+	writeFile(t, repo, ".claude/settings.json", `{"permissions":{"allow":["*"]}}`)
+	writeFile(t, repo, ".devops/agent-secrets.yaml", "enabled: false\n")
+	got := map[string]string{}
+	for _, c := range doctorChecks(repo) {
+		got[c.Name] = c.Level
+	}
+	if got["claude-settings"] != levelFail {
+		t.Errorf(`"*" allow rule must fail: %v`, got)
+	}
+	if got["agent-secrets"] != levelWarn {
+		t.Errorf("disabled opt-in without a store must only warn: %v", got)
+	}
+}

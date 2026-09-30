@@ -179,7 +179,11 @@ func uniqueModuleNames(dirs []string) []string {
 	for i, d := range dirs {
 		names[i] = moduleNameFromPath(d)
 		if count[names[i]] > 1 {
-			names[i] = strings.TrimSuffix(filepath.ToSlash(filepath.Clean(d)), "/.devops")
+			full := filepath.ToSlash(filepath.Clean(d))
+			names[i] = strings.TrimSuffix(full, "/.devops")
+			if names[i] == "root" {
+				names[i] = full
+			}
 		}
 	}
 	return names
@@ -267,12 +271,21 @@ func loadConfig(path string) (CommandConfig, map[string]string, map[string][]str
 		if body.Kind != yaml.MappingNode {
 			return nil, nil, nil, fmt.Errorf("%s: command %q must map containers to scripts", path, command)
 		}
+		if _, dup := cfg[command]; dup {
+			return nil, nil, nil, fmt.Errorf("%s: duplicate command %q", path, command)
+		}
 		cfg[command] = map[string][]Entry{}
 		for j := 0; j+1 < len(body.Content); j += 2 {
 			container, node := body.Content[j].Value, body.Content[j+1]
 			if container == descriptionKey && node.Kind == yaml.ScalarNode {
+				if _, dup := descs[command]; dup {
+					return nil, nil, nil, fmt.Errorf("%s: command %q has duplicate %q", path, command, container)
+				}
 				descs[command] = node.Value
 				continue
+			}
+			if _, dup := cfg[command][container]; dup {
+				return nil, nil, nil, fmt.Errorf("%s: command %q has duplicate container %q", path, command, container)
 			}
 			var entries []Entry
 			if err := node.Decode(&entries); err != nil {
