@@ -29,6 +29,27 @@ Design for exactly this environment; don't try to change it from the project.
 - If `devops` is missing on an agent's `PATH`, the runner image is broken: the agent stops and reports it, and doesn't work around it with `./devops` or raw `docker compose`.
 - Need a CLI change (new agent-mode behavior, a bug)? Open a PR in convidera/devops-cli, not a workaround in the project.
 
+### Built-in agent commands
+
+Besides the commands from `agents.yaml`, `devops agents` has four built-ins (they shadow a same-named `agents.yaml` command):
+
+| Command | What it does |
+|---|---|
+| `init [--retry] [dir]` | Runs the repo's `bootstrap` once and records `log`, `pid` and `done` (the exit code) under `/tmp/devops-agents/<dir>-<hash>/`. A finished or running bootstrap is left alone without `--retry`. |
+| `status [dir]` | Prints `ready`, `failed`, `running` or `not started`; exit 0, 1, 2, 3. |
+| `wait [--timeout 10m] [dir]` | Blocks until bootstrap finishes; exit 0 ready, 1 failed (prints the log tail), 124 timeout. |
+| `doctor [--json] [dir]` | Static check of `agents.yaml` (needs `bootstrap`, `test`, `lint`), referenced scripts, `CLAUDE.md`/`AGENTS.md`, `.claude/settings.json` (no `env` block, no blanket allow rules) and the `.agent-secrets` opt-in. Exit 1 on any failure. |
+
+To keep a project agent-ready in CI, call the reusable workflow:
+
+```yaml
+jobs:
+  agent-ready:
+    uses: convidera/devops-cli/.github/workflows/agent-ready.yml@main
+```
+
+It takes optional `devops-version` and `working-directory` inputs. If the caller repo is private and devops-cli is not public to it, the workflow may need its repository access setting enabled under the devops-cli repo's Actions settings.
+
 ## Done means
 
 In a fresh session, with nothing done by hand:

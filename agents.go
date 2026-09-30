@@ -27,6 +27,10 @@ func runAgents(args []string) int {
 		return 0
 	}
 
+	if isBuiltinAgentCommand(args[0]) {
+		return runAgentBuiltin(args[0], args[1:])
+	}
+
 	modules, err := discoverModules()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -77,6 +81,12 @@ func showAgentsHelp() {
 	fmt.Println("  devops agents <command> [args]            Run agent command across all modules")
 	fmt.Println("  devops agents <module> <command> [args]   Run agent command for a specific module")
 	fmt.Println("  devops agents help                        Show this help")
+	fmt.Println()
+	fmt.Println("Built-in commands:")
+	fmt.Println("  init [--retry] [dir]                      Run bootstrap once, recording log and exit code")
+	fmt.Println("  status [dir]                              Show bootstrap state (exit 0 ready, 1 failed, 2 running, 3 not started)")
+	fmt.Println("  wait [--timeout 10m] [dir]                Block until bootstrap finishes")
+	fmt.Println("  doctor [--json] [dir]                     Check the repo is agent-ready")
 	fmt.Println()
 
 	if len(agents) == 0 {
