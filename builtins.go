@@ -139,6 +139,7 @@ func describeState(st bootState) string {
 func runInit(args []string) int {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	retry := fs.Bool("retry", false, "run bootstrap again even if it already finished")
+	trace := fs.Bool("trace", false, "trace every shell command (set -x, also in bash child scripts) into the log")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -151,6 +152,9 @@ func runInit(args []string) int {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "devops: %v\n", err)
 		return 1
+	}
+	if *trace {
+		_ = os.Setenv(traceEnv, "1")
 	}
 
 	st := readState(dir)
@@ -209,6 +213,7 @@ func runBootstrapProcess(repo string, out io.Writer, stateDir string) int {
 	_ = writeFileAtomic(filepath.Join(stateDir, "pid"), []byte(strconv.Itoa(cmd.Process.Pid)+"\n"))
 	if err := cmd.Wait(); err != nil {
 		if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() > 0 {
+			_, _ = fmt.Fprintf(out, "bootstrap exited with code %d\n", ee.ExitCode())
 			return ee.ExitCode()
 		}
 		_, _ = fmt.Fprintf(out, "command failed: %v\n", err)
@@ -281,7 +286,7 @@ func runWait(args []string) int {
 		case statusFailed:
 			fmt.Printf("%s: %s\n", repo, describeState(st))
 			printLogTail(st.logPath, 20)
-			fmt.Printf("retry: devops agents init --retry %s\n", repo)
+			fmt.Printf("retry: devops agents init --retry %s   (add --trace to log every command)\n", repo)
 			return 1
 		case statusNone:
 			fmt.Printf("%s: bootstrap was never started; run: devops agents init %s\n", repo, repo)

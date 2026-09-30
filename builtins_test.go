@@ -271,3 +271,50 @@ func TestDoctorComposeOnlyRequiredWhenDockerIsUsed(t *testing.T) {
 		t.Errorf("docker project without compose file: compose = %q, want warn", got)
 	}
 }
+
+func TestDoctorAcceptsModuleLevelTestAndLint(t *testing.T) {
+	repo := t.TempDir()
+	writeFile(t, repo, ".devops/agents.yaml", "bootstrap:\n  host:\n    - \"true\"\n")
+	writeFile(t, repo, "backend/.devops/agents.yaml", "test:\n  host:\n    - \"true\"\nlint:\n  host:\n    - \"true\"\n")
+	got := map[string]string{}
+	for _, c := range doctorChecks(repo) {
+		got[c.Name] = c.Level
+	}
+	if got["command:test"] != levelOK || got["command:lint"] != levelOK {
+		t.Errorf("module-level test/lint must satisfy doctor: %v", got)
+	}
+	bare := t.TempDir()
+	writeFile(t, bare, ".devops/agents.yaml", "bootstrap:\n  host:\n    - \"true\"\n")
+	for _, c := range doctorChecks(bare) {
+		if c.Name == "command:test" && c.Level != levelFail {
+			t.Errorf("no test anywhere must still fail: %v", c)
+		}
+	}
+}
+
+func TestInitTraceAndExitLineInLog(t *testing.T) {
+	useStateRoot(t)
+	repo := t.TempDir()
+	writeFile(t, repo, ".devops/agents.yaml", "bootstrap:\n  host:\n    - ./boot.sh\n")
+	writeFile(t, repo, "boot.sh", "#!/usr/bin/env bash\nset -euo pipefail\necho '' | grep nomatch | cut -d= -f2-\n")
+	if err := os.Chmod(filepath.Join(repo, "boot.sh"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(agentEnv, "1")
+	t.Setenv(traceEnv, "")
+	bin := filepath.Join(t.TempDir(), "devops")
+	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+	bootstrapBinary = bin
+	t.Cleanup(func() { bootstrapBinary = "" })
+
+	if code := runInit([]string{"--trace", repo}); code == 0 {
+		t.Fatal("silent pipefail abort must fail")
+	}
+	dir, _ := stateDir(repo)
+	b, _ := os.ReadFile(filepath.Join(dir, "log"))
+	if !strings.Contains(string(b), "bootstrap exited with code 1") || !strings.Contains(string(b), "grep nomatch") {
+		t.Errorf("log lacks exit line or trace of the failing command: %q", b)
+	}
+}
