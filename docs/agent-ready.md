@@ -1,6 +1,6 @@
 # Make a project agent-ready
 
-You are preparing a Convidera Docker Compose project so Claude Code agents on our Kubernetes runners can start it, test it and click through it without help or workarounds. Human developers must see no change. Open one PR with the changes. Trax (convidera/t-rax2: `.devops/agents.yaml`, `.devops/agents/bootstrap.sh`, `AGENTS.md`, the `./devops` stub) is the reference implementation; read it before you start -- including its `.agent-secrets/` setup (step 9) for `auth.json`, if your project also needs a real secret to bootstrap.
+You are preparing a Convidera Docker Compose project so Claude Code agents on our Kubernetes runners can start it, test it and click through it without help or workarounds. Human developers must see no change. Open one PR with the changes. Trax (convidera/t-rax2: `.devops/agents.yaml`, `.devops/agents/bootstrap.sh`, `AGENTS.md`) is the reference implementation; read it before you start -- including its `.agent-secrets/` setup (step 9) for `auth.json`, if your project also needs a real secret to bootstrap.
 
 The `devops` CLI that runs all of this lives in [convidera/devops-cli](https://github.com/convidera/devops-cli) (this repo). It is a separate binary installed on the runner image and on developer machines, never vendored into your project. See "The `devops` CLI" below.
 
@@ -22,7 +22,7 @@ Design for exactly this environment; don't try to change it from the project.
 
 ## The `devops` CLI
 
-`devops` is the Go binary from [convidera/devops-cli](https://github.com/convidera/devops-cli). It discovers `.devops/commands.yaml` (humans) and `.devops/agents.yaml` (agents) in the project and its subdirectories and runs the commands. Projects don't carry their own copy: the runner image installs it, and humans install it from the repo's release binaries (see its [README](https://github.com/convidera/devops-cli#installation)) and update it with `devops reinstall`.
+`devops` is the Go binary from [convidera/devops-cli](https://github.com/convidera/devops-cli). It discovers `.devops/commands.yaml` (humans) and `.devops/agents.yaml` (agents) in the project and its subdirectories and runs the commands. Projects don't carry their own copy: the runner image installs it, and the project's `./devops` launcher (step 6) downloads it for humans, and `devops reinstall` upgrades it.
 
 - Agents only use `devops agents <command>`. In agent mode everything else exits 2.
 - A project only contributes YAML and scripts (`.devops/agents.yaml`, `.devops/agents/*.sh`). Don't copy or reimplement the CLI in the project.
@@ -42,7 +42,7 @@ In a fresh session, with nothing done by hand:
 ## Steps
 
 ### 1. Survey
-Read `.devops/commands.yaml`, `docker-compose.yml`, `.env.example`, the Dockerfiles and entrypoints, the seeders and **the CI workflows**. CI is the closest thing to a headless setup: every `sed`, `cp` or extra env var it needs is a gap agents will hit too. Check whether the repo still vendors a legacy bash `./devops` (step 6).
+Read `.devops/commands.yaml`, `docker-compose.yml`, `.env.example`, the Dockerfiles and entrypoints, the seeders and **the CI workflows**. CI is the closest thing to a headless setup: every `sed`, `cp` or extra env var it needs is a gap agents will hit too. Check whether the repo still vendors a legacy bash `./devops` with embedded commands; if so, migrate it to `commands.yaml` first (step 6).
 
 ### 2. `.env.example` boots the whole stack
 - By default, no secrets and no manual steps; if the project genuinely cannot bootstrap without a real credential, use the `.agent-secrets/` opt-in in step 9. External services are faked or logged: `MAIL_*=log`, empty Sentry DSN, MinIO or local storage.
@@ -153,26 +153,76 @@ echo "Stack is up: https://<project>.test (login: <user> / <password>)"
 
 If a published port can clash, pick a free one and persist it in `.env` (Trax's `choose_port` helper does this for the Traefik dashboard and DB ports, and skips it when the service is already running); copy it from Trax's `bootstrap.sh`.
 
-### 6. `./devops` stub (only if the repo vendors a bash `./devops`)
-The project must not ship its own copy of the CLI. If it still vendors a bash `./devops`, replace it with this stub, which hands over to the real `devops` from [convidera/devops-cli](https://github.com/convidera/devops-cli) on `PATH` (Trax's `./devops` is exactly this) and otherwise fails with an install hint. Delete the old script; don't keep a fallback for agents to stumble into.
+### 6. `./devops` launcher
+The project must not embed the CLI or its commands. Ship this thin launcher as `./devops`: it runs the `devops` from [convidera/devops-cli](https://github.com/convidera/devops-cli) on `PATH` if it is at least `MIN_VERSION`, and otherwise downloads that release for humans (`./devops install` does it explicitly). Agents never download: on a runner without a suitable CLI it exits 127 with "stop and report". Keep `MIN_VERSION` at **v0.0.10 or newer**, the first release with agent mode; bump it when you need a newer CLI.
+
+**Legacy `./devops` with embedded commands:** if the project still has the old bash `./devops` that contains the commands themselves, migrate it first. Move every command into `.devops/commands.yaml` (run `devops <cmd>` for each to check it behaves the same), delete the bash logic, and only then replace `./devops` with the launcher. Don't keep the old script as a fallback.
 
 ```bash
 #!/usr/bin/env bash
-# Prefer the devops CLI on PATH.
-while IFS= read -r bin; do
-    [ "$bin" -ef "$0" ] || exec "$bin" "$@"
-done < <(type -aP devops)
-agent="${DEVOPS_AGENT:-}"
-[ -z "$agent" ] && [ "${CLAUDECODE:-}" = "1" ] && agent=1
-if [ -n "$agent" ] && [ "$agent" != "0" ]; then
-    echo "devops: CLI not installed; agents must use \"devops agents <command>\". Stop and report that the runner image lacks the devops CLI." >&2
-else
-    echo "devops: CLI not installed. Install it and ensure it's on PATH." >&2
+# Thin launcher for the devops CLI (https://github.com/convidera/devops-cli).
+# Runs the newest-enough `devops` on PATH; humans get it downloaded if missing.
+# `./devops install` installs or upgrades it explicitly.
+set -u
+
+MIN_VERSION="v0.0.10"   # first release with agent mode
+INSTALL_DIR="${DEVOPS_INSTALL_DIR:-$HOME/.local/bin}"
+
+is_agent() {
+    local agent="${DEVOPS_AGENT:-}"
+    [ -z "$agent" ] && [ "${CLAUDECODE:-}" = "1" ] && agent=1
+    [ -n "$agent" ] && [ "$agent" != "0" ]
+}
+
+# A local "dev" build is always accepted.
+version_ok() {
+    local v
+    v="$("$1" version 2>/dev/null)" || return 1
+    [ "$v" = "dev" ] && return 0
+    [ "$(printf '%s\n%s\n' "$MIN_VERSION" "$v" | sort -V | head -n 1)" = "$MIN_VERSION" ]
+}
+
+find_cli() {
+    local bin
+    while IFS= read -r bin; do
+        [ "$bin" -ef "$0" ] && continue
+        version_ok "$bin" && { echo "$bin"; return 0; }
+    done < <(type -aP devops)
+    [ -x "$INSTALL_DIR/devops" ] && version_ok "$INSTALL_DIR/devops" && { echo "$INSTALL_DIR/devops"; return 0; }
+    return 1
+}
+
+install_cli() {
+    local os arch tmp
+    case "$(uname -s)" in Linux) os=linux ;; Darwin) os=darwin ;; *) echo "devops: unsupported OS $(uname -s)" >&2; return 1 ;; esac
+    case "$(uname -m)" in x86_64|amd64) arch=amd64 ;; aarch64|arm64) arch=arm64 ;; *) echo "devops: unsupported architecture $(uname -m)" >&2; return 1 ;; esac
+    mkdir -p "$INSTALL_DIR"
+    tmp="$(mktemp "$INSTALL_DIR/.devops-install-XXXXXX")" || return 1
+    echo "devops: installing $MIN_VERSION to $INSTALL_DIR/devops" >&2
+    if ! curl -fsSL "https://github.com/convidera/devops-cli/releases/download/$MIN_VERSION/devops-$os-$arch" -o "$tmp"; then
+        rm -f "$tmp"; echo "devops: download failed" >&2; return 1
+    fi
+    chmod +x "$tmp" && mv "$tmp" "$INSTALL_DIR/devops"
+    case ":$PATH:" in *":$INSTALL_DIR:"*) ;; *) echo "devops: add $INSTALL_DIR to your PATH to use \`devops\` directly." >&2 ;; esac
+}
+
+if [ "${1:-}" = "install" ] && ! is_agent; then
+    install_cli
+    exit $?
 fi
-exit 127
+
+if ! cli="$(find_cli)"; then
+    if is_agent; then
+        echo "devops: CLI >= $MIN_VERSION not installed; agents must use \"devops agents <command>\". Stop and report that the runner image lacks the devops CLI." >&2
+        exit 127
+    fi
+    install_cli || exit 127
+    cli="$INSTALL_DIR/devops"
+fi
+exec "$cli" "$@"
 ```
 
-Point humans to the CLI's [installation instructions](https://github.com/convidera/devops-cli#installation) in the project README. If the project's README or docs still mention a project-local `./devops install`, update them.
+Point humans to `./devops install` (or the CLI's [installation instructions](https://github.com/convidera/devops-cli#installation)) in the project README, and update any docs that describe a project-local installer.
 
 ### 7. `AGENTS.md` (under ~50 lines; Claude Code reads it when there is no `CLAUDE.md`)
 - One line on what the project is.
