@@ -1,6 +1,6 @@
 # Make a project agent-ready
 
-You are preparing a Convidera Docker Compose project so Claude Code agents on our Kubernetes runners can start it, test it and click through it without help or workarounds. Human developers must see no change. Open one PR with the changes. Trax (convidera/t-rax2: `.devops/agents.yaml`, `.devops/agents/bootstrap.sh`, `AGENTS.md`) is the reference implementation; read it before you start -- including its `.agent-secrets/` setup (step 9) for `auth.json`, if your project also needs a real secret to bootstrap.
+You are preparing a Convidera project (usually Docker Compose; see "Host-only projects" for ML/Python and other projects without compose) so Claude Code agents on our Kubernetes runners can start it, test it and click through it without help or workarounds. Human developers must see no change. Open one PR with the changes. Trax (convidera/t-rax2: `.devops/agents.yaml`, `.devops/agents/bootstrap.sh`, `AGENTS.md`) is the reference implementation; read it before you start -- including its `.agent-secrets/` setup (step 9) for `auth.json`, if your project also needs a real secret to bootstrap.
 
 The `devops` CLI that runs all of this lives in [convidera/devops-cli](https://github.com/convidera/devops-cli) (this repo). It is a separate binary installed on the runner image and on developer machines, never vendored into your project. See "The `devops` CLI" below.
 
@@ -59,6 +59,16 @@ In a fresh session, with nothing done by hand:
 4. `devops agents down -v` then `bootstrap` gives a working fresh database.
 5. Files containers write into the checkout are owned by the agent.
 6. `git status` is clean afterwards.
+
+## Host-only projects (no Docker Compose)
+
+Some projects (ML training pipelines, libraries, CLIs) run on the host and have no compose file. They are agent-ready too; the contract is the same, minus the Docker parts:
+
+- `agents.yaml` still needs `bootstrap`, `test` and `lint`. Entries are plain `host` commands, for example `uv run --directory training pytest tests "$@"`. `down`, `logs` and `recreate` only make sense when there is a stack, so skip them.
+- `bootstrap.sh` just installs dependencies and prepares local config: for example `uv sync`, then `[ -f .env ] || cp .env.example .env`. It must stay idempotent, headless and secret-free, and it must exit. The runner image has `uv`, python3, node 22, yq and jq; don't download toolchains in bootstrap.
+- Skip steps 2 (full-stack `.env.example`), 3 (compose conventions) and the compose parts of steps 4 and 5: no mkcert, ports, healthchecks or seeding. `devops agents doctor` does not require a compose file when `agents.yaml` and the bootstrap script don't use docker.
+- Keep commands fast and CPU-only. Anything that needs a GPU or a large model download (full training, export, serving) stays human-only; give agents a smoke variant or a stubbed test instead, and say in `AGENTS.md` which commands are which.
+- Steps 6 to 9 (launcher, `AGENTS.md`, housekeeping, optional `.agent-secrets/`) apply unchanged.
 
 ## Steps
 

@@ -106,9 +106,12 @@ func doctorChecks(repo string) []Check {
 			break
 		}
 	}
-	if found == "" {
-		add("compose", levelWarn, "no compose file at the repo root")
-	} else {
+	switch {
+	case found == "" && usesDocker(repo):
+		add("compose", levelWarn, "agents.yaml or the bootstrap script uses docker but there is no compose file at the repo root")
+	case found == "":
+		add("compose", levelOK, "no compose file needed (host-only project)")
+	default:
 		add("compose", levelOK, "%s found", found)
 	}
 
@@ -142,6 +145,20 @@ func doctorChecks(repo string) []Check {
 		checkSecretsOptIn(path(".devops", "agent-secrets.yaml"), add)
 	}
 	return out
+}
+
+// usesDocker reports whether agents.yaml or a bootstrap script mentions docker.
+func usesDocker(repo string) bool {
+	files := []string{filepath.Join(repo, ".devops", "agents.yaml")}
+	if m, err := filepath.Glob(filepath.Join(repo, ".devops", "agents", "*.sh")); err == nil {
+		files = append(files, m...)
+	}
+	for _, f := range files {
+		if b, err := os.ReadFile(f); err == nil && strings.Contains(strings.ToLower(string(b)), "docker") {
+			return true
+		}
+	}
+	return false
 }
 
 type addFn func(name, level, msg string, a ...any)

@@ -249,3 +249,25 @@ func TestAgentsAbortsWhenBuiltinIsOverridden(t *testing.T) {
 		t.Error("doctor must still run and report the clash as a failure")
 	}
 }
+
+func TestDoctorComposeOnlyRequiredWhenDockerIsUsed(t *testing.T) {
+	compose := func(repo string) string {
+		for _, c := range doctorChecks(repo) {
+			if c.Name == "compose" {
+				return c.Level
+			}
+		}
+		return ""
+	}
+	host := t.TempDir()
+	writeFile(t, host, ".devops/agents.yaml", "bootstrap:\n  host:\n    - .devops/agents/bootstrap.sh\n")
+	writeFile(t, host, ".devops/agents/bootstrap.sh", "#!/bin/sh\nuv sync\n")
+	if got := compose(host); got != levelOK {
+		t.Errorf("host-only project: compose = %q, want ok", got)
+	}
+	dock := t.TempDir()
+	writeFile(t, dock, ".devops/agents.yaml", "bootstrap:\n  host:\n    - docker compose up -d\n")
+	if got := compose(dock); got != levelWarn {
+		t.Errorf("docker project without compose file: compose = %q, want warn", got)
+	}
+}
