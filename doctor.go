@@ -66,6 +66,25 @@ func runDoctor(args []string) int {
 	return 0
 }
 
+// moduleAgentsDefining lists the module directories (up to 3 levels below
+// repo) whose .devops/agents.yaml defines cmd, for monorepos that keep
+// test/lint per module instead of at the root.
+func moduleAgentsDefining(repo, cmd string) []string {
+	var out []string
+	for _, pattern := range []string{"*/.devops/agents.yaml", "*/*/.devops/agents.yaml", "*/*/*/.devops/agents.yaml"} {
+		matches, _ := filepath.Glob(filepath.Join(repo, pattern))
+		for _, m := range matches {
+			if cfg, _, _, err := loadConfig(m); err == nil {
+				if _, ok := cfg[cmd]; ok {
+					rel, _ := filepath.Rel(repo, filepath.Dir(filepath.Dir(m)))
+					out = append(out, rel)
+				}
+			}
+		}
+	}
+	return out
+}
+
 func doctorChecks(repo string) []Check {
 	var out []Check
 	add := func(name, level, msg string, a ...any) {
@@ -83,6 +102,12 @@ func doctorChecks(repo string) []Check {
 		add("agents.yaml", levelOK, "parses, %d command(s)", len(cfg))
 		for _, cmd := range requiredAgentCommands {
 			if _, ok := cfg[cmd]; !ok {
+				if cmd != "bootstrap" {
+					if mods := moduleAgentsDefining(repo, cmd); len(mods) > 0 {
+						add("command:"+cmd, levelOK, "defined per module (%s)", strings.Join(mods, ", "))
+						continue
+					}
+				}
 				add("command:"+cmd, levelFail, "agents.yaml defines no %q command", cmd)
 			} else {
 				add("command:"+cmd, levelOK, "defined")

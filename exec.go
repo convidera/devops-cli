@@ -13,6 +13,9 @@ import (
 	"golang.org/x/term"
 )
 
+// traceEnv makes host scripts (and bash scripts they call) print each command.
+const traceEnv = "DEVOPS_TRACE"
+
 // runModuleSequential runs all containers/entries for a module's command in order.
 // Entries for the same container share a single shell invocation, so state like
 // `cd` and exported variables carries over from one entry to the next.
@@ -55,7 +58,13 @@ func runScript(container, script string, extraArgs []string) error {
 
 	var cmd *exec.Cmd
 	if container == "host" {
+		if os.Getenv(traceEnv) == "1" {
+			shArgs = append([]string{"-x"}, shArgs...)
+		}
 		cmd = exec.Command("sh", shArgs...)
+		if os.Getenv(traceEnv) == "1" {
+			cmd.Env = append(os.Environ(), "SHELLOPTS=xtrace")
+		}
 	} else {
 		args := []string{"compose", "exec"}
 		if !isTTY() {

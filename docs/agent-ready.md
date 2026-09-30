@@ -35,10 +35,10 @@ Besides the commands from `agents.yaml`, `devops agents` has four built-ins (`ag
 
 | Command | What it does |
 |---|---|
-| `init [--retry] [dir]` | Runs the repo's `bootstrap` once and records `log`, `pid` and `done` (the exit code) under `/tmp/devops-agents/<dir>-<hash>/`. A successful or still-running bootstrap is left alone without `--retry`; a failed one is rerun by the next `init`. |
+| `init [--retry] [dir]` | Runs the repo's `bootstrap` once and records `log`, `pid` and `done` (the exit code) under `/tmp/devops-agents/<dir>-<hash>/`. A successful or still-running bootstrap is left alone without `--retry`; a failed one is rerun by the next `init`. `--trace` logs every shell command (`set -x`, inherited by bash scripts) to find where a script aborted silently. |
 | `status [dir]` | Prints `ready`, `failed`, `running` or `not started`; exit 0 ready, 1 failed, 2 running, 3 not started. |
 | `wait [--timeout 10m] [dir]` | Blocks until bootstrap finishes; exit 0 ready, 1 failed (prints the log tail), 3 never started, 124 timeout. |
-| `doctor [--json] [dir]` | Static check of `agents.yaml` (needs `bootstrap`, `test`, `lint`), referenced scripts, `CLAUDE.md`/`AGENTS.md`, `.claude/settings.json` (no `env` block, no blanket allow rules) and the `.agent-secrets` opt-in. Exit 1 on any failure. |
+| `doctor [--json] [dir]` | Static check of `agents.yaml` (needs `bootstrap`, `test`, `lint`; in a monorepo `test`/`lint` may live in module-level `agents.yaml` files instead of the root one), referenced scripts, `CLAUDE.md`/`AGENTS.md`, `.claude/settings.json` (no `env` block, no blanket allow rules) and the `.agent-secrets` opt-in. Exit 1 on any failure. |
 
 To keep a project agent-ready in CI, call the reusable workflow:
 
