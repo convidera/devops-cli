@@ -1,0 +1,47 @@
+name: Agent ready
+
+# Reusable workflow: fails a PR when the repo stops being agent-ready.
+# Call it from a project:
+#
+#   jobs:
+#     agent-ready:
+#       uses: convidera/devops-cli/.github/workflows/agent-ready.yml@main
+#
+# It runs `devops agents doctor`, a static check of .devops/agents.yaml,
+# agent instructions, .claude/settings.json and the .agent-secrets opt-in. It
+# does not start the compose stack.
+
+on:
+  workflow_call:
+    inputs:
+      devops-version:
+        description: Release tag of devops-cli to install (for example v0.1.0), or latest
+        type: string
+        default: latest
+      working-directory:
+        description: Directory of the project to check, relative to the repo root
+        type: string
+        default: .
+
+permissions:
+  contents: read
+
+jobs:
+  doctor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Install devops
+        env:
+          VERSION: ${{ inputs.devops-version }}
+        run: |
+          base="https://github.com/convidera/devops-cli/releases"
+          if [ "$VERSION" = latest ]; then url="$base/latest/download/devops-linux-amd64"; else url="$base/download/$VERSION/devops-linux-amd64"; fi
+          curl -fsSL "$url" -o "$RUNNER_TEMP/devops"
+          chmod +x "$RUNNER_TEMP/devops"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: Doctor
+        working-directory: ${{ inputs.working-directory }}
+        run: devops agents doctor
