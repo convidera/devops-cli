@@ -17,11 +17,12 @@ import (
 // Entries for the same container share a single shell invocation, so state like
 // `cd` and exported variables carries over from one entry to the next.
 func runModuleSequential(m *Module, command string, extraArgs []string) error {
-	containers, ok := m.Config[command]
+	configured, ok := m.Config[command]
 	if !ok {
 		return fmt.Errorf("command %q not found in module %s", command, m.Name)
 	}
-	for container, entries := range containers {
+	for _, container := range m.containers(command) {
+		entries := configured[container]
 		fmt.Fprintf(os.Stderr, "Running commands for: %s\n", container)
 		for _, entry := range entries {
 			fmt.Fprintf(os.Stderr, "Executing: %s\n", entry.Script)
