@@ -90,7 +90,7 @@ func doctorChecks(repo string) []Check {
 		}
 		for _, cmd := range builtinAgentCommands {
 			if _, ok := cfg[cmd]; ok {
-				add("command:"+cmd, levelWarn, "%q is a devops built-in; the agents.yaml entry is never run", cmd)
+				add("command:"+cmd, levelFail, "%q is a devops built-in and cannot be defined in agents.yaml; devops agents aborts until it is renamed", cmd)
 			}
 		}
 		if bootstrap, ok := cfg["bootstrap"]; ok {

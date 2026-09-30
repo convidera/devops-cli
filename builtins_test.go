@@ -129,7 +129,7 @@ func TestDoctorChecks(t *testing.T) {
 	writeFile(t, repo, "CLAUDE.md", "@AGENTS.md\n")
 	writeFile(t, repo, "docker-compose.yml", "services: {}\n")
 	got := levels()
-	if got["agents.yaml"] != levelOK || got["bootstrap-script"] != levelFail || got["command:status"] != levelWarn || got["instructions"] != levelOK {
+	if got["agents.yaml"] != levelOK || got["bootstrap-script"] != levelFail || got["command:status"] != levelFail || got["instructions"] != levelOK {
 		t.Errorf("partial repo: %v", got)
 	}
 
@@ -232,5 +232,20 @@ func TestDoctorWildcardAndDisabledOptIn(t *testing.T) {
 	}
 	if got["agent-secrets"] != levelWarn {
 		t.Errorf("disabled opt-in without a store must only warn: %v", got)
+	}
+}
+
+func TestAgentsAbortsWhenBuiltinIsOverridden(t *testing.T) {
+	useStateRoot(t)
+	repo := t.TempDir()
+	writeFile(t, repo, ".devops/agents.yaml", "bootstrap:\n  host:\n    - \"true\"\nstatus:\n  host:\n    - \"true\"\n")
+	t.Chdir(repo)
+	for _, args := range [][]string{{"bootstrap"}, {"status"}, {"init"}} {
+		if code := runAgents(args); code != 1 {
+			t.Errorf("runAgents(%v) = %d, want 1 (abort)", args, code)
+		}
+	}
+	if code := runAgents([]string{"doctor"}); code == 0 {
+		t.Error("doctor must still run and report the clash as a failure")
 	}
 }

@@ -15,8 +15,8 @@ import (
 	"time"
 )
 
-// builtinAgentCommands are handled by devops itself and shadow any command of
-// the same name in agents.yaml (`doctor` reports such a clash).
+// builtinAgentCommands are handled by devops itself; an agents.yaml command
+// with the same name aborts `devops agents` and is a `doctor` failure.
 var builtinAgentCommands = []string{"init", "status", "wait", "doctor"}
 
 // Exit codes of `devops agents status`.
@@ -45,6 +45,17 @@ func stateDir(repo string) (string, error) {
 	}
 	sum := sha1.Sum([]byte(abs)) //nolint:gosec // see import
 	return filepath.Join(stateRoot, filepath.Base(abs)+"-"+hex.EncodeToString(sum[:])[:8]), nil
+}
+
+// shadowedBuiltins lists built-in names that agents.yaml also defines.
+func shadowedBuiltins(agents []*Module) []string {
+	var out []string
+	for _, b := range builtinAgentCommands {
+		if len(findModulesForCommand(agents, b)) > 0 {
+			out = append(out, b)
+		}
+	}
+	return out
 }
 
 func isBuiltinAgentCommand(name string) bool {

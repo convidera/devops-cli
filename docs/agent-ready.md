@@ -31,7 +31,7 @@ Design for exactly this environment; don't try to change it from the project.
 
 ### Built-in agent commands
 
-Besides the commands from `agents.yaml`, `devops agents` has four built-ins (they shadow a same-named `agents.yaml` command):
+Besides the commands from `agents.yaml`, `devops agents` has four built-ins (`agents.yaml` must not define a command with one of these names: `devops agents` aborts with a warning until it is renamed, and `doctor` fails):
 
 | Command | What it does |
 |---|---|
