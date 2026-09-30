@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -147,19 +148,36 @@ func doctorChecks(repo string) []Check {
 	return out
 }
 
-// usesDocker reports whether agents.yaml or a bootstrap script mentions docker.
+// usesDocker reports whether an agents.yaml command or a bootstrap script
+// invokes docker. Descriptions and shell comment lines don't count.
 func usesDocker(repo string) bool {
-	files := []string{filepath.Join(repo, ".devops", "agents.yaml")}
-	if m, err := filepath.Glob(filepath.Join(repo, ".devops", "agents", "*.sh")); err == nil {
-		files = append(files, m...)
+	if cfg, _, _, err := loadConfig(filepath.Join(repo, ".devops", "agents.yaml")); err == nil {
+		for _, containers := range cfg {
+			for _, entries := range containers {
+				for _, e := range entries {
+					if dockerWord.MatchString(e.Script) {
+						return true
+					}
+				}
+			}
+		}
 	}
-	for _, f := range files {
-		if b, err := os.ReadFile(f); err == nil && strings.Contains(strings.ToLower(string(b)), "docker") {
-			return true
+	scripts, _ := filepath.Glob(filepath.Join(repo, ".devops", "agents", "*.sh"))
+	for _, f := range scripts {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(b), "\n") {
+			if t := strings.TrimSpace(line); !strings.HasPrefix(t, "#") && dockerWord.MatchString(t) {
+				return true
+			}
 		}
 	}
 	return false
 }
+
+var dockerWord = regexp.MustCompile(`(^|[^A-Za-z0-9_-])docker(-compose)?([^A-Za-z0-9_-]|$)`)
 
 type addFn func(name, level, msg string, a ...any)
 

@@ -265,6 +265,12 @@ func TestDoctorComposeOnlyRequiredWhenDockerIsUsed(t *testing.T) {
 	if got := compose(host); got != levelOK {
 		t.Errorf("host-only project: compose = %q, want ok", got)
 	}
+	quiet := t.TempDir()
+	writeFile(t, quiet, ".devops/agents.yaml", "bootstrap:\n  description: No Docker, no secrets\n  host:\n    - .devops/agents/bootstrap.sh\n")
+	writeFile(t, quiet, ".devops/agents/bootstrap.sh", "#!/bin/sh\n# no docker needed here\nuv sync\n")
+	if got := compose(quiet); got != levelOK {
+		t.Errorf("docker only in description/comment: compose = %q, want ok", got)
+	}
 	dock := t.TempDir()
 	writeFile(t, dock, ".devops/agents.yaml", "bootstrap:\n  host:\n    - docker compose up -d\n")
 	if got := compose(dock); got != levelWarn {
