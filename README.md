@@ -28,7 +28,7 @@ chmod +x /usr/local/bin/devops
 
 ### Build from source
 
-Requires Go 1.22+.
+Requires Go 1.25+.
 
 ```bash
 go install github.com/convidera/devops-cli@latest

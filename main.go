@@ -147,6 +147,7 @@ func runSingleModuleCommand(m *Module, command string, extraArgs []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	fmt.Fprintf(os.Stderr, "Completed %q for module %s.\n", command, m.Name)
 	return 0
 }
 

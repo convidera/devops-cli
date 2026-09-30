@@ -28,11 +28,24 @@ func runAgents(args []string) int {
 	}
 
 	modules, err := discoverModules()
-	if err != nil {
+	if err != nil && !isBuiltinAgentCommand(args[0]) {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
 	}
 	agents := agentModules(modules)
+
+	// doctor stays runnable so it can report the clash itself.
+	if args[0] != "doctor" {
+		if clash := shadowedBuiltins(agents); len(clash) > 0 {
+			fmt.Fprintf(os.Stderr, "devops: warning: agents.yaml defines %s, which %s devops built-in(s) and cannot be overridden; rename the command(s). Aborting.\n",
+				strings.Join(clash, ", "), map[bool]string{true: "is a", false: "are"}[len(clash) == 1])
+			return 1
+		}
+	}
+
+	if isBuiltinAgentCommand(args[0]) {
+		return runAgentBuiltin(args[0], args[1:])
+	}
 
 	if m := findModule(agents, args[0]); m != nil {
 		if len(args) < 2 {
@@ -77,6 +90,12 @@ func showAgentsHelp() {
 	fmt.Println("  devops agents <command> [args]            Run agent command across all modules")
 	fmt.Println("  devops agents <module> <command> [args]   Run agent command for a specific module")
 	fmt.Println("  devops agents help                        Show this help")
+	fmt.Println()
+	fmt.Println("Built-in commands:")
+	fmt.Println("  init [--retry] [dir]                      Run bootstrap once, recording log and exit code")
+	fmt.Println("  status [dir]                              Show bootstrap state (exit 0 ready, 1 failed, 2 running, 3 not started)")
+	fmt.Println("  wait [--timeout 10m] [dir]                Block until bootstrap finishes")
+	fmt.Println("  doctor [--json] [dir]                     Check the repo is agent-ready")
 	fmt.Println()
 
 	if len(agents) == 0 {

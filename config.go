@@ -58,10 +58,36 @@ type Module struct {
 	Path         string
 	Config       CommandConfig
 	Descriptions map[string]string
+	// Order lists each command's containers in file order, so they run
+	// deterministically. Empty means sorted by name.
+	Order map[string][]string
 	// Agents holds the commands from .devops/agents.yaml, if present.
 	Agents            CommandConfig
 	AgentDescriptions map[string]string
+	AgentsOrder       map[string][]string
 	AgentsPath        string
+}
+
+// containers returns a command's container names in file order, falling back
+// to sorted order for modules built without a file.
+func (m *Module) containers(command string) []string {
+	cfg := m.Config[command]
+	var out []string
+	seen := map[string]bool{}
+	for _, c := range m.Order[command] {
+		if _, ok := cfg[c]; ok && !seen[c] {
+			out = append(out, c)
+			seen[c] = true
+		}
+	}
+	var rest []string
+	for c := range cfg {
+		if !seen[c] {
+			rest = append(rest, c)
+		}
+	}
+	sort.Strings(rest)
+	return append(out, rest...)
 }
 
 // effectivePriority is the lowest priority value across all entries for a command.
@@ -83,12 +109,21 @@ func (m *Module) effectivePriority(command string) int {
 
 // firstContainer returns the first container key found across all commands.
 func (m *Module) firstContainer() string {
-	for _, containers := range m.Config {
-		for k := range containers {
-			return k
+	for _, command := range sortedKeys(m.Config) {
+		if cs := m.containers(command); len(cs) > 0 {
+			return cs[0]
 		}
 	}
 	return ""
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // discoverModules finds all .devops directories containing commands.yaml
@@ -117,8 +152,9 @@ func discoverModules() ([]*Module, error) {
 		candidates = append(candidates, matches...)
 	}
 
-	for _, dir := range candidates {
-		name := moduleNameFromPath(dir)
+	names := uniqueModuleNames(candidates)
+	for i, dir := range candidates {
+		name := names[i]
 		m, err := loadModuleDir(name, dir)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", name, err)
@@ -129,6 +165,28 @@ func discoverModules() ([]*Module, error) {
 	}
 
 	return modules, nil
+}
+
+// uniqueModuleNames names each .devops directory by its first path segment and
+// falls back to the full relative path (minus "/.devops") for any name that
+// more than one directory, or the reserved "root" module, would share.
+func uniqueModuleNames(dirs []string) []string {
+	count := map[string]int{"root": 1}
+	for _, d := range dirs {
+		count[moduleNameFromPath(d)]++
+	}
+	names := make([]string, len(dirs))
+	for i, d := range dirs {
+		names[i] = moduleNameFromPath(d)
+		if count[names[i]] > 1 {
+			full := filepath.ToSlash(filepath.Clean(d))
+			names[i] = strings.TrimSuffix(full, "/.devops")
+			if names[i] == "root" {
+				names[i] = full
+			}
+		}
+	}
+	return names
 }
 
 func moduleNameFromPath(path string) string {
@@ -161,12 +219,13 @@ func loadModuleDir(name, dir string) (*Module, error) {
 		m = loaded
 	}
 	if hasAgents {
-		cfg, descs, err := loadConfig(agentsPath)
+		cfg, descs, order, err := loadConfig(agentsPath)
 		if err != nil {
 			return nil, fmt.Errorf("agents.yaml: %w", err)
 		}
 		m.Agents = cfg
 		m.AgentDescriptions = descs
+		m.AgentsOrder = order
 		m.AgentsPath = agentsPath
 	}
 	return m, nil
@@ -178,41 +237,65 @@ func fileExists(path string) bool {
 }
 
 func loadModule(name, path string) (*Module, error) {
-	cfg, descs, err := loadConfig(path)
+	cfg, descs, order, err := loadConfig(path)
 	if err != nil {
 		return nil, err
 	}
-	return &Module{Name: name, Path: path, Config: cfg, Descriptions: descs}, nil
+	return &Module{Name: name, Path: path, Config: cfg, Descriptions: descs, Order: order}, nil
 }
 
 // loadConfig parses a commands/agents file, splitting off each command's
-// optional scalar `description` so it is not treated as a container.
-func loadConfig(path string) (CommandConfig, map[string]string, error) {
+// optional scalar `description` so it is not treated as a container. The
+// returned order holds each command's containers as written in the file.
+func loadConfig(path string) (CommandConfig, map[string]string, map[string][]string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	var raw map[string]map[string]yaml.Node
-	if err := yaml.Unmarshal(data, &raw); err != nil {
-		return nil, nil, err
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return nil, nil, nil, err
 	}
 	cfg := CommandConfig{}
 	descs := map[string]string{}
-	for command, containers := range raw {
+	order := map[string][]string{}
+	if len(doc.Content) == 0 {
+		return cfg, descs, order, nil
+	}
+	top := doc.Content[0]
+	if top.Kind != yaml.MappingNode {
+		return nil, nil, nil, fmt.Errorf("%s: expected a mapping of commands", path)
+	}
+	for i := 0; i+1 < len(top.Content); i += 2 {
+		command, body := top.Content[i].Value, top.Content[i+1]
+		if body.Kind != yaml.MappingNode {
+			return nil, nil, nil, fmt.Errorf("%s: command %q must map containers to scripts", path, command)
+		}
+		if _, dup := cfg[command]; dup {
+			return nil, nil, nil, fmt.Errorf("%s: duplicate command %q", path, command)
+		}
 		cfg[command] = map[string][]Entry{}
-		for container, node := range containers {
+		for j := 0; j+1 < len(body.Content); j += 2 {
+			container, node := body.Content[j].Value, body.Content[j+1]
 			if container == descriptionKey && node.Kind == yaml.ScalarNode {
+				if _, dup := descs[command]; dup {
+					return nil, nil, nil, fmt.Errorf("%s: command %q has duplicate %q", path, command, container)
+				}
 				descs[command] = node.Value
 				continue
 			}
+			if _, dup := cfg[command][container]; dup {
+				return nil, nil, nil, fmt.Errorf("%s: command %q has duplicate container %q", path, command, container)
+			}
 			var entries []Entry
 			if err := node.Decode(&entries); err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			cfg[command][container] = entries
+			order[command] = append(order[command], container)
 		}
 	}
-	return cfg, descs, nil
+	return cfg, descs, order, nil
 }
 
 // agentModules returns a view of modules whose Config is their agents.yaml,
@@ -221,7 +304,7 @@ func agentModules(modules []*Module) []*Module {
 	var out []*Module
 	for _, m := range modules {
 		if len(m.Agents) > 0 {
-			out = append(out, &Module{Name: m.Name, Path: m.AgentsPath, Config: m.Agents, Descriptions: m.AgentDescriptions})
+			out = append(out, &Module{Name: m.Name, Path: m.AgentsPath, Config: m.Agents, Descriptions: m.AgentDescriptions, Order: m.AgentsOrder})
 		}
 	}
 	return out

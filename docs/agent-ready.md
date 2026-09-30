@@ -1,6 +1,6 @@
 # Make a project agent-ready
 
-You are preparing a Convidera Docker Compose project so Claude Code agents on our Kubernetes runners can start it, test it and click through it without help or workarounds. Human developers must see no change. Open one PR with the changes. Trax (convidera/t-rax2: `.devops/agents.yaml`, `.devops/agents/bootstrap.sh`, `AGENTS.md`) is the reference implementation; read it before you start -- including its `.agent-secrets/` setup (step 9) for `auth.json`, if your project also needs a real secret to bootstrap.
+You are preparing a Convidera project (usually Docker Compose; see "Host-only projects" for ML/Python and other projects without compose) so Claude Code agents on our Kubernetes runners can start it, test it and click through it without help or workarounds. Human developers must see no change. Open one PR with the changes. Trax (convidera/t-rax2: `.devops/agents.yaml`, `.devops/agents/bootstrap.sh`, `AGENTS.md`) is the reference implementation; read it before you start -- including its `.agent-secrets/` setup (step 9) for `auth.json`, if your project also needs a real secret to bootstrap.
 
 The `devops` CLI that runs all of this lives in [convidera/devops-cli](https://github.com/convidera/devops-cli) (this repo). It is a separate binary installed on the runner image and on developer machines, never vendored into your project. See "The `devops` CLI" below.
 
@@ -16,8 +16,8 @@ Design for exactly this environment; don't try to change it from the project.
 | Network | Egress on 80, 443 and 22; published ports answer on `127.0.0.1` in the session |
 | Tools | `devops` CLI (agent mode), docker compose + buildx, mkcert (no CA install), yq, jq, gh, node 22, git-secret (no key for the project's regular `.gitsecret` store; see "`.agent-secrets/`" below for the opt-in exception) |
 | Browser | Playwright MCP, headless Chromium: `*.test` → 127.0.0.1, HTTPS errors ignored. The shell can't resolve `*.test`; use `curl -k --resolve host:443:127.0.0.1` |
-| devops CLI | Built from [convidera/devops-cli](https://github.com/convidera/devops-cli), v0.0.10+, on `PATH` on runners. With `CLAUDECODE=1`/`DEVOPS_AGENT=1` it only runs `devops agents <cmd>` from `.devops/agents.yaml`; everything else exits 2. Its own status lines go to stderr |
-| Session start | If `.devops/agents.yaml` exists, the hook runs `devops agents bootstrap` in the background → log `/tmp/devops-agents-bootstrap.log`, exit code in `/tmp/devops-agents-bootstrap.done` |
+| devops CLI | Built from [convidera/devops-cli](https://github.com/convidera/devops-cli), **v0.1.0+** (agent mode itself since v0.0.10; the built-ins below need v0.1.0), on `PATH` on runners. With `CLAUDECODE=1`/`DEVOPS_AGENT=1` it only runs `devops agents <cmd>` from `.devops/agents.yaml`; everything else exits 2. Its own status lines go to stderr |
+| Session start | If `.devops/agents.yaml` exists, the hook runs `devops agents init` in the background; state lives under `/tmp/devops-agents/<dir>-<hash>/` (`log`, `pid`, `done` = exit code). Use `devops agents status` / `wait` to follow it |
 | Secrets | None by default -- agents only ever use `.env.example` placeholders. A project can opt specific non-prod files into `.agent-secrets/` if it genuinely can't bootstrap without them; see step 9 |
 
 ## The `devops` CLI
@@ -29,6 +29,27 @@ Design for exactly this environment; don't try to change it from the project.
 - If `devops` is missing on an agent's `PATH`, the runner image is broken: the agent stops and reports it, and doesn't work around it with `./devops` or raw `docker compose`.
 - Need a CLI change (new agent-mode behavior, a bug)? Open a PR in convidera/devops-cli, not a workaround in the project.
 
+### Built-in agent commands
+
+Besides the commands from `agents.yaml`, `devops agents` has four built-ins (`agents.yaml` must not define a command with one of these names: `devops agents` aborts with a warning until it is renamed, and `doctor` fails):
+
+| Command | What it does |
+|---|---|
+| `init [--retry] [dir]` | Runs the repo's `bootstrap` once and records `log`, `pid` and `done` (the exit code) under `/tmp/devops-agents/<dir>-<hash>/`. A successful or still-running bootstrap is left alone without `--retry`; a failed one is rerun by the next `init`. |
+| `status [dir]` | Prints `ready`, `failed`, `running` or `not started`; exit 0 ready, 1 failed, 2 running, 3 not started. |
+| `wait [--timeout 10m] [dir]` | Blocks until bootstrap finishes; exit 0 ready, 1 failed (prints the log tail), 3 never started, 124 timeout. |
+| `doctor [--json] [dir]` | Static check of `agents.yaml` (needs `bootstrap`, `test`, `lint`), referenced scripts, `CLAUDE.md`/`AGENTS.md`, `.claude/settings.json` (no `env` block, no blanket allow rules) and the `.agent-secrets` opt-in. Exit 1 on any failure. |
+
+To keep a project agent-ready in CI, call the reusable workflow:
+
+```yaml
+jobs:
+  agent-ready:
+    uses: convidera/devops-cli/.github/workflows/agent-ready.yml@v0.1.0
+```
+
+It takes optional `devops-version` and `working-directory` inputs. If the caller repo is private and devops-cli is not public to it, the workflow may need its repository access setting enabled under the devops-cli repo's Actions settings.
+
 ## Done means
 
 In a fresh session, with nothing done by hand:
@@ -38,6 +59,16 @@ In a fresh session, with nothing done by hand:
 4. `devops agents down -v` then `bootstrap` gives a working fresh database.
 5. Files containers write into the checkout are owned by the agent.
 6. `git status` is clean afterwards.
+
+## Host-only projects (no Docker Compose)
+
+Some projects (ML training pipelines, libraries, CLIs) run on the host and have no compose file. They are agent-ready too; the contract is the same, minus the Docker parts:
+
+- `agents.yaml` still needs `bootstrap`, `test` and `lint`. Entries are plain `host` commands, for example `uv run --directory training pytest tests "$@"`. `down`, `logs` and `recreate` only make sense when there is a stack, so skip them.
+- `bootstrap.sh` just installs dependencies and prepares local config: for example `uv sync`, then `[ -f .env ] || cp .env.example .env`. It must stay idempotent, headless and secret-free, and it must exit. The runner image has `uv`, python3, node 22, yq and jq; don't download toolchains in bootstrap.
+- Skip steps 2 (full-stack `.env.example`), 3 (compose conventions) and the compose parts of steps 4 and 5: no mkcert, ports, healthchecks or seeding. `devops agents doctor` does not require a compose file when `agents.yaml` and the bootstrap script don't use docker.
+- Keep commands fast and CPU-only. Anything that needs a GPU or a large model download (full training, export, serving) stays human-only; give agents a smoke variant or a stubbed test instead, and say in `AGENTS.md` which commands are which.
+- Steps 6 to 9 (launcher, `AGENTS.md`, housekeeping, optional `.agent-secrets/`) apply unchanged.
 
 ## Steps
 
