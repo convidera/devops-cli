@@ -16,8 +16,8 @@ Design for exactly this environment; don't try to change it from the project.
 | Network | Egress on 80, 443 and 22; published ports answer on `127.0.0.1` in the session |
 | Tools | `devops` CLI (agent mode), docker compose + buildx, mkcert (no CA install), yq, jq, gh, node 22, git-secret (no key for the project's regular `.gitsecret` store; see "`.agent-secrets/`" below for the opt-in exception) |
 | Browser | Playwright MCP, headless Chromium: `*.test` → 127.0.0.1, HTTPS errors ignored. The shell can't resolve `*.test`; use `curl -k --resolve host:443:127.0.0.1` |
-| devops CLI | Built from [convidera/devops-cli](https://github.com/convidera/devops-cli), **v0.1.0+** (agent mode itself since v0.0.10; the built-ins below need v0.1.0), on `PATH` on runners. With `CLAUDECODE=1`/`DEVOPS_AGENT=1` it only runs `devops agents <cmd>` from `.devops/agents.yaml`; everything else exits 2. Its own status lines go to stderr |
-| Session start | If `.devops/agents.yaml` exists, the hook runs `devops agents init` in the background; state lives under `/tmp/devops-agents/<dir>-<hash>/` (`log`, `pid`, `done` = exit code). Use `devops agents status` / `wait` to follow it |
+| devops CLI | Built from [convidera/devops-cli](https://github.com/convidera/devops-cli), **v0.2.0+** (agent mode since v0.0.10, the built-ins below since v0.1.0, per-module `test`/`lint` in `doctor` and `init --trace` since v0.2.0), on `PATH` on runners. With `CLAUDECODE=1`/`DEVOPS_AGENT=1` it only runs `devops agents <cmd>` from `.devops/agents.yaml`; everything else exits 2. Its own status lines go to stderr |
+| Session start | For the project, its direct subdirectories and sibling repos checked out next to it (directories with a `.git`), the hook runs `devops agents init` in the background wherever `.devops/agents.yaml` exists; repos without one are ignored, and module directories of a monorepo are not scanned (only the repo root bootstraps). State lives under `/tmp/devops-agents/<dir>-<hash>/` (`log`, `pid`, `done` = exit code). Use `devops agents status` / `wait` to follow it |
 | Secrets | None by default -- agents only ever use `.env.example` placeholders. A project can opt specific non-prod files into `.agent-secrets/` if it genuinely can't bootstrap without them; see step 9 |
 
 ## The `devops` CLI
@@ -45,7 +45,7 @@ To keep a project agent-ready in CI, call the reusable workflow:
 ```yaml
 jobs:
   agent-ready:
-    uses: convidera/devops-cli/.github/workflows/agent-ready.yml@v0.1.0
+    uses: convidera/devops-cli/.github/workflows/agent-ready.yml@v0.2.0
 ```
 
 It takes optional `devops-version` and `working-directory` inputs. If the caller repo is private and devops-cli is not public to it, the workflow may need its repository access setting enabled under the devops-cli repo's Actions settings.
@@ -93,7 +93,7 @@ Change these only in ways that keep today's defaults for humans:
 ### 4. `.devops/agents.yaml`
 Same schema as `commands.yaml`. **Only list commands you have seen work headless.** A listed command that fails is worse than a missing one.
 
-Required: `bootstrap`, `down`, `test`, `lint` (whatever CI runs), `logs`, `recreate`. Add framework pass-throughs as needed (`artisan`, `composer`, `yarn`/`npm`, `console`, …).
+Required: `bootstrap`, `down`, `test`, `lint` (whatever CI runs), `logs`, `recreate`. In a monorepo the root `agents.yaml` must define `bootstrap`; `test` and `lint` may instead live in `<module>/.devops/agents.yaml` (up to 3 levels deep), which `doctor` accepts. Don't name a command `init`, `status`, `wait` or `doctor`: they are built-ins and `devops agents` aborts on a clash. Add framework pass-throughs as needed (`artisan`, `composer`, `yarn`/`npm`, `console`, …).
 
 ```yaml
 bootstrap:
@@ -149,6 +149,10 @@ cd "$(dirname "$0")/../.."
 
 [ -f .env ] || cp .env.example .env
 
+# Under `set -euo pipefail` a grep with no match aborts the script silently.
+# When reading an optional value, add `|| true`:
+#   port="$(grep '^HTTPS_PORT=' .env | tail -n 1 | cut -d= -f2-)" || true
+
 append_env() {
     [ -z "$(tail -c 1 .env)" ] || echo >> .env
     echo "$1" >> .env
@@ -185,7 +189,7 @@ echo "Stack is up: https://<project>.test (login: <user> / <password>)"
 If a published port can clash, pick a free one and persist it in `.env` (Trax's `choose_port` helper does this for the Traefik dashboard and DB ports, and skips it when the service is already running); copy it from Trax's `bootstrap.sh`.
 
 ### 6. `./devops` launcher
-The project must not embed the CLI or its commands. Ship this thin launcher as `./devops`: it runs the `devops` from [convidera/devops-cli](https://github.com/convidera/devops-cli) if it is at least `MIN_VERSION`, looking on `PATH` first and then in its own install directory (`~/.local/bin`, override with `DEVOPS_INSTALL_DIR`), and otherwise downloads that release there for humans (`./devops install` does it explicitly). Humans normally go through `./devops`, so the CLI doesn't need to be on their `PATH`; on runners it is on `PATH` from the image. Agents never download: on a runner without a suitable CLI it exits 127 with "stop and report". Keep `MIN_VERSION` at **v0.0.10 or newer**, the first release with agent mode; bump it when you need a newer CLI.
+The project must not embed the CLI or its commands. Ship this thin launcher as `./devops`: it runs the `devops` from [convidera/devops-cli](https://github.com/convidera/devops-cli) if it is at least `MIN_VERSION`, looking on `PATH` first and then in its own install directory (`~/.local/bin`, override with `DEVOPS_INSTALL_DIR`), and otherwise downloads that release there for humans (`./devops install` does it explicitly). Humans normally go through `./devops`, so the CLI doesn't need to be on their `PATH`; on runners it is on `PATH` from the image. Agents never download: on a runner without a suitable CLI it exits 127 with "stop and report". Keep `MIN_VERSION` at **v0.0.10 or newer**, the first release with agent mode; bump it only when the project needs a newer CLI, for example a command or `doctor` behaviour added later (per-module `test`/`lint` needs v0.2.0).
 
 **Legacy `./devops` with embedded commands:** if the project still has the old bash `./devops` that contains the commands themselves, migrate it first. Move every command into `.devops/commands.yaml` (run `devops <cmd>` for each to check it behaves the same), delete the bash logic, and only then replace `./devops` with the launcher. Don't keep the old script as a fallback.
 
@@ -259,7 +263,7 @@ Point humans to `./devops install` (they can also put the CLI on their `PATH`, s
 - The rule: only use `devops agents <command>`. If `devops` is missing (`command -v devops` fails), stop and report that the runner image lacks the devops CLI; don't fall back to `./devops` or `docker compose up`.
 - Any project git conventions (Trax asks for Conventional Commits).
 - The command list with example arguments and rough durations.
-- How to wait for the hook: the `.done` file, or the log ending in `Completed` or `command failed`.
+- How to wait for the hook: `devops agents wait` (blocks; exit 0 ready, 1 failed, 124 timeout) or `devops agents status` (0 ready, 1 failed, 2 running, 3 not started). On failure, `devops agents init --retry --trace` reruns bootstrap and logs every command, which finds silent aborts.
 - Access: the URL in the Playwright browser, the curl `--resolve` form, the dev login, and to save screenshots under `/tmp/playwright/`.
 - Gotchas: never decrypt the regular `.gitsecret` store or ask for GPG keys (if the project uses `.agent-secrets/`, say so and note it's already revealed automatically -- see step 9), use `recreate` after `.env` changes, how to reset the DB, and any log noise.
 
