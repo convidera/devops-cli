@@ -16,6 +16,7 @@ Design for exactly this environment; don't try to change it from the project.
 | Network | Egress on 80, 443 and 22; published ports answer on `127.0.0.1` in the session |
 | Tools | `devops` CLI (agent mode), docker compose + buildx, mkcert (no CA install), yq, jq, gh, node 22, git-secret (no key for the project's regular `.gitsecret` store; see "`.agent-secrets/`" below for the opt-in exception) |
 | Browser | Playwright MCP, headless Chromium: `*.test` → 127.0.0.1, HTTPS errors ignored. The shell can't resolve `*.test`; use `curl -k --resolve host:443:127.0.0.1` |
+| Preview | In a managed-coding-service (MCS) session the user can open the running app at `https://<session>.preview.devcon.team`. The session sets `MCS_PREVIEW_HOST` (and `MCS_PREVIEW_URL`) in the agent's environment; the app only has to answer to that host too, see "Session preview" below. That host does not resolve in the agent's browser, so the agent keeps using `https://<project>.test` |
 | devops CLI | Built from [convidera/devops-cli](https://github.com/convidera/devops-cli), **v0.2.0+** (agent mode since v0.0.10, the built-ins below since v0.1.0, per-module `test`/`lint` in `doctor` and `init --trace` since v0.2.0), on `PATH` on runners. With `CLAUDECODE=1`/`DEVOPS_AGENT=1` it only runs `devops agents <cmd>` from `.devops/agents.yaml`; everything else exits 2. Its own status lines go to stderr |
 | Session start | For the project, its direct subdirectories and sibling repos checked out next to it (directories with a `.git`), the hook runs `devops agents init` in the background wherever `.devops/agents.yaml` exists; repos without one are ignored, and module directories of a monorepo are not scanned (only the repo root bootstraps). State lives under `/tmp/devops-agents/<dir>-<hash>/` (`log`, `pid`, `done` = exit code). Use `devops agents status` / `wait` to follow it |
 | Secrets | None by default -- agents only ever use `.env.example` placeholders. A project can opt specific non-prod files into `.agent-secrets/` if it genuinely can't bootstrap without them; see step 9 |
@@ -264,6 +265,7 @@ Point humans to `./devops install` (they can also put the CLI on their `PATH`, s
 - Any project git conventions (Trax asks for Conventional Commits).
 - The command list with example arguments and rough durations.
 - How to wait for the hook: `devops agents wait` (blocks; exit 0 ready, 1 failed, 124 timeout) or `devops agents status` (0 ready, 1 failed, 2 running, 3 not started). On failure, `devops agents init --retry --trace` reruns bootstrap and logs every command, which finds silent aborts.
+- If the project is previewable (see "Session preview"): one short section saying the agent keeps using the `.test` URL.
 - Access: the URL in the Playwright browser, the curl `--resolve` form, the dev login, and to save screenshots under `/tmp/playwright/`.
 - Gotchas: never decrypt the regular `.gitsecret` store or ask for GPG keys (if the project uses `.agent-secrets/`, say so and note it's already revealed automatically -- see step 9), use `recreate` after `.env` changes, how to reset the DB, and any log noise.
 
@@ -312,6 +314,47 @@ SECRETS_DIR=.agent-secrets SECRETS_EXTENSION=.agent.secret git secret hide
   boundary (revealed before the agent's first turn, key wiped immediately
   after) -- not filesystem isolation.
 - Reference: Trax's `auth.json` (Composer auth for private package repos).
+
+## Session preview (optional, Compose projects with a web UI)
+
+MCS can show the stack a session started to the user, in their own browser. A proxy forwards `https://<session>.preview.devcon.team` to the session pod's published HTTPS port (Traefik on 443) with the preview host as `Host` header and SNI, and rewrites nothing. So the stack has to be willing to be reached under that name **in addition to** `<project>.test`, which the agent keeps using (the Playwright browser only maps `*.test`, `curl --resolve` targets the local name, tests and screenshots use it). Design and contracts: `docs/architecture/preview.md` in [convidera/managed-coding-service](https://github.com/convidera/managed-coding-service).
+
+What the runner/session provides: `MCS_PREVIEW_HOST` (for example `as-<uuid>.preview.devcon.team`) and `MCS_PREVIEW_URL` (`https://<host>`) in the environment of `devops agents bootstrap` and of every agent command, only when MCS has the preview enabled for that environment. Unset everywhere else, so the project must behave exactly as before without it.
+
+What the project adds (one small PR; Trax is the reference, convidera/t-rax2 `.devops/agents/compose.preview.yml`):
+
+1. **`.devops/preview.yaml`**: tells the proxy where to connect. The host is not configured here.
+   ```yaml
+   scheme: https   # default https
+   port: 443       # default 443 for https, 80 for http
+   ```
+   MCS shows the preview only for repositories that have this file, and only when the adapter's probe (`127.0.0.1:<port>` with `Host: $MCS_PREVIEW_HOST`) gets an answer other than a refused connection, a timeout, Traefik's plain-text 404 or a 502/503/504.
+2. **`.devops/agents/compose.preview.yml`**: a compose override that extends every Traefik router rule that serves the UI or API with the preview host and keeps the local one, and passes `MCS_PREVIEW_HOST` to services that need it (a Vite dev server, for example):
+   ```yaml
+   services:
+     app:
+       labels:
+         - "traefik.http.routers.frontend.rule=(Host(`<project>.test`) || Host(`${MCS_PREVIEW_HOST:?set by the session}`)) && PathPrefix(`/`)"
+   ```
+   Compose merges `labels` by key, so the override replaces the base rule. For several routers (SPA on `/`, API on `/api`) override each one.
+3. **`bootstrap.sh`** loads the override only inside a session, and persists the choice so `recreate`, `up` and `down` keep it (they run plain `docker compose`):
+   ```bash
+   if [ -n "${MCS_PREVIEW_HOST:-}" ]; then
+       grep -q '^MCS_PREVIEW_HOST=' .env || append_env "MCS_PREVIEW_HOST=${MCS_PREVIEW_HOST}"
+       grep -q '^COMPOSE_FILE=' .env || append_env "COMPOSE_FILE=docker-compose.yml:.devops/agents/compose.preview.yml"
+   fi
+   ```
+   Put it before the first `docker compose up`, because `.env` and `env_file` are read at container creation.
+4. **Audit what derives from the host** and make each of these accept both names. Nothing needs rewriting if all of them follow the request host:
+   - the framework trusts `X-Forwarded-Host/Proto` (Laravel: `trustProxies` with the forwarded headers) or builds URLs from the request, not from a fixed `APP_URL`;
+   - session cookies are host-only (`SESSION_DOMAIN` null); Sanctum stateful domains and CORS origins list both hosts if used;
+   - a Vite dev server: `server.allowedHosts` includes the preview host and `server.origin` is not fixed to the local name (use relative asset URLs when `MCS_PREVIEW_HOST` is set); HMR follows the page origin;
+   - websockets use the page origin, not a hard-coded host.
+
+   URLs that the app builds from its own configuration (mail links, queued jobs, the public disk URL) keep showing the local name in the preview; OAuth redirects that must be registered per host do not work on a preview host. Note both in `AGENTS.md`.
+5. **`AGENTS.md`**: one short section: the preview host is not for the agent, keep using `https://<project>.test`, what the override does.
+
+Validate without a session: `MCS_PREVIEW_HOST=as-x.preview.devcon.team docker compose -f docker-compose.yml -f .devops/agents/compose.preview.yml config` must show the merged rules (and fail loudly without the variable); a plain `docker compose config` must be unchanged. The real check is a session on a runner with the preview enabled.
 
 ## Validate before pushing
 - `docker compose config -q` (with a temporary `.env` from `.env.example`), `bash -n` and shellcheck on scripts, and `yq` parses every YAML file.
