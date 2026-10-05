@@ -58,14 +58,16 @@ func runScript(container, script string, extraArgs []string) error {
 
 	var cmd *exec.Cmd
 	if container == "host" {
+		env := rootlessEnv()
 		if os.Getenv(traceEnv) == "1" {
 			shArgs = append([]string{"-x"}, shArgs...)
+			env = appendEnv(env, "SHELLOPTS=xtrace")
 		}
 		cmd = exec.Command("sh", shArgs...)
-		if os.Getenv(traceEnv) == "1" {
-			cmd.Env = append(os.Environ(), "SHELLOPTS=xtrace")
-		}
+		cmd.Env = env
 	} else {
+		// cmd.Env here would only set the `docker` CLI's own process environment, not the
+		// container's — docker compose exec needs -e to forward a variable into the container.
 		args := []string{"compose", "exec"}
 		if !isTTY() {
 			args = append(args, "-T")
@@ -78,6 +80,16 @@ func runScript(container, script string, extraArgs []string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return runWithSignalForwarding(cmd)
+}
+
+// appendEnv adds kv to env, first materializing os.Environ() if env is nil
+// (exec.Cmd's "inherit everything" default) so the addition doesn't instead
+// replace the whole environment.
+func appendEnv(env []string, kv string) []string {
+	if env == nil {
+		env = os.Environ()
+	}
+	return append(env, kv)
 }
 
 // runExec opens an interactive shell (or runs a command) in a module's container.
