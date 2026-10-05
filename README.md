@@ -195,6 +195,30 @@ The TUI needs a terminal. Without one — in CI, when output is piped or redirec
 
 Set `DEVOPS_NO_TUI=1` to force this mode even in an interactive terminal.
 
+## Rootless Docker
+
+Rootless Docker (and classic userns-remap) map the invoking host user to container uid 0,
+so anything the daemon creates on a bind mount — and the container's own default user —
+ends up owned by uid 0 from inside any container, not by whatever non-root service account
+an image normally runs as (e.g. `www-data`). devops detects this once per run and sets
+`DEVOPS_DOCKER_ROOTLESS=1` for every `host:` script, so a module can react without each
+reimplementing the `docker info` check itself — for example, renumbering a build-time
+service account to uid 0 so the mechanisms that already drop privileges to it by name
+(a `php-fpm` pool's `user =`, `chpst -u`, `gosu`, ...) pick it up automatically:
+
+```yaml
+bootstrap:
+  host:
+    - |
+      if [ "$DEVOPS_DOCKER_ROOTLESS" = 1 ]; then
+        export USER_UID=0 USER_GID=0
+      fi
+      docker compose build app
+```
+
+Set `DEVOPS_DOCKER_ROOTLESS=0` to force it off (or `=1` to force it on, e.g. if `docker
+info` is slow or unavailable but the answer is already known).
+
 ## YAML reference
 
 ```yaml
