@@ -19,6 +19,7 @@ Design for exactly this environment; don't try to change it from the project.
 | devops CLI | Built from [convidera/devops-cli](https://github.com/convidera/devops-cli), **v0.2.0+** (agent mode since v0.0.10, the built-ins below since v0.1.0, per-module `test`/`lint` in `doctor` and `init --trace` since v0.2.0), on `PATH` on runners. With `CLAUDECODE=1`/`DEVOPS_AGENT=1` it only runs `devops agents <cmd>` from `.devops/agents.yaml`; everything else exits 2. Its own status lines go to stderr |
 | Session start | For the project, its direct subdirectories and sibling repos checked out next to it (directories with a `.git`), the hook runs `devops agents init` in the background wherever `.devops/agents.yaml` exists; repos without one are ignored, and module directories of a monorepo are not scanned (only the repo root bootstraps). State lives under `/tmp/devops-agents/<dir>-<hash>/` (`log`, `pid`, `done` = exit code). Use `devops agents status` / `wait` to follow it |
 | Secrets | None by default -- agents only ever use `.env.example` placeholders. A project can opt specific non-prod files into `.agent-secrets/` if it genuinely can't bootstrap without them; see step 9 |
+| Preview | In a managed-coding-service session with the live preview on, `MCS_PREVIEW_HOST` (`as-<session>.preview.<domain>`) and `MCS_PREVIEW_URL` are set in the session. Only projects that opt in use them; see step 10 |
 
 ## The `devops` CLI
 
@@ -68,7 +69,7 @@ Some projects (ML training pipelines, libraries, CLIs) run on the host and have 
 - `bootstrap.sh` just installs dependencies and prepares local config: for example `uv sync`, then `[ -f .env ] || cp .env.example .env`. It must stay idempotent, headless and secret-free, and it must exit. The runner image has `uv`, python3, node 22, yq and jq; don't download toolchains in bootstrap.
 - Skip steps 2 (full-stack `.env.example`), 3 (compose conventions) and the compose parts of steps 4 and 5: no mkcert, ports, healthchecks or seeding. `devops agents doctor` does not require a compose file when `agents.yaml` and the bootstrap script don't use docker.
 - Keep commands fast and CPU-only. Anything that needs a GPU or a large model download (full training, export, serving) stays human-only; give agents a smoke variant or a stubbed test instead, and say in `AGENTS.md` which commands are which.
-- Steps 6 to 9 (launcher, `AGENTS.md`, housekeeping, optional `.agent-secrets/`) apply unchanged.
+- Steps 6 to 9 (launcher, `AGENTS.md`, housekeeping, optional `.agent-secrets/`) apply unchanged. The preview (step 10) only makes sense for projects that serve HTTP.
 
 ## Steps
 
@@ -312,6 +313,47 @@ SECRETS_DIR=.agent-secrets SECRETS_EXTENSION=.agent.secret git secret hide
   boundary (revealed before the agent's first turn, key wiped immediately
   after) -- not filesystem isolation.
 - Reference: Trax's `auth.json` (Composer auth for private package repos).
+
+### 10. Live preview in managed-coding-service sessions (optional)
+
+Skip this unless people should open the running app from the session page ("Open preview"). A project without `.devops/preview.yaml` has no preview row and nothing changes for it. Design: `docs/architecture/preview.md` in convidera/managed-coding-service. Trax (`.devops/preview.yaml`, `.devops/agents/compose.preview.yml`, the preview block in `.devops/agents/bootstrap.sh`) is the reference.
+
+How it works: a preview proxy forwards `https://<as-session>.preview.<domain>` to the session pod and sends the request to the stack's entrypoint (usually Traefik on 443 or 80) with the preview host as `Host`. The app keeps its normal local name (`<project>.test`) for the agent; the stack just also answers to the preview host.
+
+1. **Declare the target** in `.devops/preview.yaml`. The adapter probes `127.0.0.1:<port>` with `Host: $MCS_PREVIEW_HOST`; any HTTP response (also a redirect or 404) counts as up:
+   ```yaml
+   scheme: https   # or http
+   port: 443       # 1-65535
+   ```
+   A missing or malformed file means "no preview". Only these two keys exist.
+2. **Answer to the preview host** in a compose override that is loaded only inside a session, so humans see no change. For Traefik, add the host to the router rule next to the local name:
+   ```yaml
+   # .devops/agents/compose.preview.yml
+   services:
+     app:
+       labels:
+         - "traefik.http.routers.frontend.rule=(Host(`<project>.test`) || Host(`${MCS_PREVIEW_HOST:?set by the session}`)) && PathPrefix(`/`)"
+   ```
+   Redefine the rule completely (compose merges labels by key). Add the preview host to any other host allow-list the app has (trusted hosts, CORS, Vite or webpack dev server `allowedHosts`).
+3. **Load it from `bootstrap.sh`**, only when the variable is set, and persist it in `.env`, so later `docker compose` calls (`recreate`, `up`) keep the override:
+   ```bash
+   if [ -n "${MCS_PREVIEW_HOST:-}" ]; then
+       grep -q '^MCS_PREVIEW_HOST=' .env || append_env "MCS_PREVIEW_HOST=${MCS_PREVIEW_HOST}"
+       preview_file=.devops/agents/compose.preview.yml
+       if grep -q '^COMPOSE_FILE=' .env; then
+           # Keep the project's own overrides and add ours once.
+           grep '^COMPOSE_FILE=' .env | grep -qF "$preview_file" || sed -i "s|^COMPOSE_FILE=.*|&:${preview_file}|" .env
+       else
+           append_env "COMPOSE_FILE=docker-compose.yml:${preview_file}"
+       fi
+   fi
+   ```
+4. **Make the app follow the request host.** Behind the proxy the app sees `X-Forwarded-Host` of the preview host. Trust the proxy headers (Laravel `trustProxies`) and build URLs and cookies from the request, not from a fixed `APP_URL`. The preview host is a different origin than `<project>.test`: cookies are host-only, so the user logs in again there.
+5. **Mention it in `AGENTS.md`**: the agent keeps using `https://<project>.test`; the preview host is for the user's browser only.
+
+Known limits: URLs built from a configured base URL (mails, absolute URLs in code) still show the local name; OAuth providers that need registered redirect URIs do not work on a preview host; one host per session and HTTP only (WebSockets work); the preview does not keep an idle session awake.
+
+Check: in a session with the preview on, `echo "$MCS_PREVIEW_HOST"` is set and the session page shows "Preview ready" once bootstrap is done. Probe the declared target (adjust scheme and port to your `.devops/preview.yaml`): `curl -k --resolve "$MCS_PREVIEW_HOST:443:127.0.0.1" "https://$MCS_PREVIEW_HOST/"` for `https`/443, or `curl --resolve "$MCS_PREVIEW_HOST:80:127.0.0.1" "http://$MCS_PREVIEW_HOST/"` for `http`/80. Locally you cannot reach the host (it exists only on the cluster), but you can validate the override itself by naming both compose files, independent of `.env`: `MCS_PREVIEW_HOST=x.preview.test docker compose -f docker-compose.yml -f .devops/agents/compose.preview.yml config -q` (add your project's other `-f` files).
 
 ## Validate before pushing
 - `docker compose config -q` (with a temporary `.env` from `.env.example`), `bash -n` and shellcheck on scripts, and `yq` parses every YAML file.
