@@ -339,7 +339,13 @@ How it works: a preview proxy forwards `https://<as-session>.preview.<domain>` t
    ```bash
    if [ -n "${MCS_PREVIEW_HOST:-}" ]; then
        grep -q '^MCS_PREVIEW_HOST=' .env || append_env "MCS_PREVIEW_HOST=${MCS_PREVIEW_HOST}"
-       grep -q '^COMPOSE_FILE=' .env || append_env "COMPOSE_FILE=docker-compose.yml:.devops/agents/compose.preview.yml"
+       preview_file=.devops/agents/compose.preview.yml
+       if grep -q '^COMPOSE_FILE=' .env; then
+           # Keep the project's own overrides and add ours once.
+           grep '^COMPOSE_FILE=' .env | grep -qF "$preview_file" || sed -i "s|^COMPOSE_FILE=.*|&:${preview_file}|" .env
+       else
+           append_env "COMPOSE_FILE=docker-compose.yml:${preview_file}"
+       fi
    fi
    ```
 4. **Make the app follow the request host.** Behind the proxy the app sees `X-Forwarded-Host` of the preview host. Trust the proxy headers (Laravel `trustProxies`) and build URLs and cookies from the request, not from a fixed `APP_URL`. The preview host is a different origin than `<project>.test`: cookies are host-only, so the user logs in again there.
@@ -347,7 +353,7 @@ How it works: a preview proxy forwards `https://<as-session>.preview.<domain>` t
 
 Known limits: URLs built from a configured base URL (mails, absolute URLs in code) still show the local name; OAuth providers that need registered redirect URIs do not work on a preview host; one host per session and HTTP only (WebSockets work); the preview does not keep an idle session awake.
 
-Check: in a session with the preview on, `echo "$MCS_PREVIEW_HOST"` is set, `curl -k --resolve "$MCS_PREVIEW_HOST:443:127.0.0.1" "https://$MCS_PREVIEW_HOST/"` answers once bootstrap is done, and the session page shows "Preview ready". Locally you cannot reach it (the host exists only on the cluster); `MCS_PREVIEW_HOST=x.preview.test docker compose config -q` still validates the override.
+Check: in a session with the preview on, `echo "$MCS_PREVIEW_HOST"` is set and the session page shows "Preview ready" once bootstrap is done. Probe the declared target (adjust scheme and port to your `.devops/preview.yaml`): `curl -k --resolve "$MCS_PREVIEW_HOST:443:127.0.0.1" "https://$MCS_PREVIEW_HOST/"` for `https`/443, or `curl --resolve "$MCS_PREVIEW_HOST:80:127.0.0.1" "http://$MCS_PREVIEW_HOST/"` for `http`/80. Locally you cannot reach the host (it exists only on the cluster), but you can validate the override itself by naming both compose files, independent of `.env`: `MCS_PREVIEW_HOST=x.preview.test docker compose -f docker-compose.yml -f .devops/agents/compose.preview.yml config -q` (add your project's other `-f` files).
 
 ## Validate before pushing
 - `docker compose config -q` (with a temporary `.env` from `.env.example`), `bash -n` and shellcheck on scripts, and `yq` parses every YAML file.
