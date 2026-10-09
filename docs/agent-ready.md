@@ -1,6 +1,6 @@
 # Make a project agent-ready
 
-You are preparing a Convidera project (usually Docker Compose; see "Host-only projects" for ML/Python and other projects without compose) so Claude Code agents on our Kubernetes runners can start it, test it and click through it without help or workarounds. Human developers must see no change. Open one PR with the changes. Trax (convidera/t-rax2: `.devops/agents.yaml`, `.devops/agents/bootstrap.sh`, `AGENTS.md`) is the reference implementation; read it before you start -- including its `.agent-secrets/` setup (step 9) for `auth.json`, if your project also needs a real secret to bootstrap.
+You are preparing a project (usually Docker Compose; see "Host-only projects" for ML/Python and other projects without compose) so coding agents with docker access can start it, test it and click through it without help or workarounds. Human developers must see no change. Open one PR with the changes. Trax (convidera/t-rax2: `.devops/agents.yaml`, `.devops/agents/bootstrap.sh`, `AGENTS.md`) is the reference implementation.
 
 The `devops` CLI that runs all of this lives in [convidera/devops-cli](https://github.com/convidera/devops-cli) (this repo). It is a separate binary installed on the runner image and on developer machines, never vendored into your project. See "The `devops` CLI" below.
 
@@ -12,7 +12,6 @@ Design for exactly this environment; don't try to change it from the project.
 |---|---|
 | User | UID 65532, no root, no sudo, no TTY, no `/etc/hosts` edits, no apt-get |
 | Docker | dind sidecar via `DOCKER_HOST`; `/workspace` is shared, so bind mounts work. userns-remap: **container root = the agent's UID**, other container users map to foreign UIDs |
-| Registry | Docker Hub pulls go through an in-cluster pull-through mirror (logged in read-only) |
 | Network | Egress on 80, 443 and 22; published ports answer on `127.0.0.1` in the session |
 | Tools | `devops` CLI (agent mode), docker compose + buildx, mkcert (no CA install), yq, jq, gh, node 22, git-secret (no key for the project's regular `.gitsecret` store; see "`.agent-secrets/`" below for the opt-in exception) |
 | Browser | Playwright MCP, headless Chromium: `*.test` → 127.0.0.1, HTTPS errors ignored. The shell can't resolve `*.test`; use `curl -k --resolve host:443:127.0.0.1` |
