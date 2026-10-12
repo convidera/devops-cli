@@ -381,7 +381,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
 
       - name: Prepare agent environment
         run: /usr/local/libexec/convidera/copilot-agent-init
