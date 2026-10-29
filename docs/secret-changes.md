@@ -17,7 +17,7 @@ a workflow with `on.pull_request.paths` (`.gitsecret/**`, `**/*.secret`).
   secret-changes:
     needs: changes
     if: needs.changes.outputs.secrets == 'true' || needs.changes.outputs.workflow == 'true'
-    uses: convidera/devops-cli/.github/workflows/secret-changes.yml@v1
+    uses: convidera/devops-cli/.github/workflows/secret-changes.yml@v0.2.4
     permissions:
       contents: read
       pull-requests: write
@@ -32,5 +32,5 @@ a workflow with `on.pull_request.paths` (`.gitsecret/**`, `**/*.secret`).
 
 ## Versions
 
-Callers pin a major tag (`@v1`, bumped by Renovate). A change to the workflow is released by moving the tag, so test
-it on a PR in a consuming repo with `@<branch>` first.
+Callers pin a release tag (`@v0.2.4`, bumped by Renovate). A change to the workflow is released with the next
+devops-cli release; test it first on a PR in a consuming repo with `@<branch>`.
