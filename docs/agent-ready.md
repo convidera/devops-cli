@@ -68,7 +68,7 @@ Some projects (ML training pipelines, libraries, CLIs) run on the host and have 
 - `bootstrap.sh` just installs dependencies and prepares local config: for example `uv sync`, then `[ -f .env ] || cp .env.example .env`. It must stay idempotent, headless and secret-free, and it must exit. The runner image has `uv`, python3, node 22, yq and jq; don't download toolchains in bootstrap.
 - Skip steps 2 (full-stack `.env.example`), 3 (compose conventions) and the compose parts of steps 4 and 5: no mkcert, ports, healthchecks or seeding. `devops agents doctor` does not require a compose file when `agents.yaml` and the bootstrap script don't use docker.
 - Keep commands fast and CPU-only. Anything that needs a GPU or a large model download (full training, export, serving) stays human-only; give agents a smoke variant or a stubbed test instead, and say in `AGENTS.md` which commands are which.
-- Steps 6 to 9 (launcher, `AGENTS.md`, housekeeping, optional `.agent-secrets/`) and 11 (Copilot setup steps) apply unchanged. The preview (step 10) only makes sense for projects that serve HTTP.
+- Steps 6 to 9 (launcher, `AGENTS.md`, housekeeping, optional `.agent-secrets/`) and 11 (Copilot setup steps and code review runner) apply unchanged. The preview (step 10) only makes sense for projects that serve HTTP.
 
 ## Steps
 
@@ -368,7 +368,7 @@ Known limits: URLs built from a configured base URL (mails, absolute URLs in cod
 
 Check: in a session with the preview on, `echo "$MCS_PREVIEW_HOST"` is set and the session page shows "Preview ready" once bootstrap is done. Probe the declared target (adjust scheme and port to your `.devops/preview.yaml`): `curl -k --resolve "$MCS_PREVIEW_HOST:443:127.0.0.1" "https://$MCS_PREVIEW_HOST/"` for `https`/443, or `curl --resolve "$MCS_PREVIEW_HOST:80:127.0.0.1" "http://$MCS_PREVIEW_HOST/"` for `http`/80. Locally you cannot reach the host (it exists only on the cluster), but you can validate the override itself by naming both compose files, independent of `.env`: `MCS_PREVIEW_HOST=x.preview.test docker compose -f docker-compose.yml -f .devops/agents/compose.preview.yml config -q` (add your project's other `-f` files).
 
-### 11. Copilot cloud agent setup steps
+### 11. Copilot cloud agent setup steps and code review runner
 
 The GitHub Copilot cloud agent doesn't run the SessionStart hook. It runs `.github/workflows/copilot-setup-steps.yml` before the agent starts, and on the `gha-runners-convidera-copilot` scale set (convidera/k8s-runners `docs/copilot-agents.md`) `copilot-agent-init` does the same preparation: it reveals `.agent-secrets/` if the project opted in (step 9) and runs `devops agents init`. Add the file verbatim:
 
@@ -404,6 +404,39 @@ jobs:
 - Copilot only reads the single job named `copilot-setup-steps`; don't rename it or split it into a changes/checks/ci shape.
 - Keep it out of required checks. The `pull_request` trigger with `paths:` only exists so a change to the file is exercised on its PR; `workflow_dispatch` runs it by hand.
 - Reference: convidera/managed-coding-service `.github/workflows/copilot-setup-steps.yml`.
+
+Copilot code review uses the same file when the repo has no `.github/workflows/copilot-code-review.yml` ([GitHub docs](https://docs.github.com/en/copilot/how-tos/copilot-on-github/set-up-copilot/configure-runners)). It would then run on the `gha-runners-convidera-copilot` scale set with the full `copilot-agent-init` bootstrap (Docker stack), which a review does not need and which queues behind coding sessions. So also add this file, which puts review on a GitHub-hosted runner with no bootstrap:
+
+```yaml
+name: Copilot Code Review Setup
+
+# Runner for Copilot code review. Without this file, Copilot code review falls back to
+# copilot-setup-steps.yml, i.e. onto the gha-runners-convidera-copilot scale set with the
+# full agent bootstrap (Docker stack), which a review does not need. Like
+# copilot-setup-steps.yml it is read from the default branch, must stay a single job
+# with this id, and is never a required check, so native `paths:` is fine here.
+# https://docs.github.com/en/copilot/how-tos/copilot-on-github/set-up-copilot/configure-runners
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/copilot-code-review.yml
+
+jobs:
+  copilot-setup-steps:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+```
+
+- The job id stays `copilot-setup-steps`, as in the GitHub docs' examples for this file.
+- Not verified: that GitHub accepts `ubuntu-latest` here (the docs only show `ubuntu-4-core`) and whether it runs the steps. Check one review run after merging: it must not land on `gha-runners-convidera-copilot`.
+- Org setting: Copilot, Runner type, has separate defaults for the cloud agent and code review; keep the code review default on the standard GitHub runner.
+- Reference: convidera/security-dashboard `.github/workflows/copilot-code-review.yml`.
 
 ## Validate before pushing
 - `docker compose config -q` (with a temporary `.env` from `.env.example`), `bash -n` and shellcheck on scripts, and `yq` parses every YAML file.
