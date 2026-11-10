@@ -29,13 +29,13 @@ a workflow with `on.pull_request.paths` (`.gitsecret/**`, `**/*.secret`).
 |---|---|---|
 | `runner` | `gha-runners-convidera-xs` | `runs-on` label |
 | `secrets-dir` | `.gitsecret` | git-secret store directory (`SECRETS_DIR`) |
-| `secrets-extension` | `secret` | Extension of the encrypted files, without the dot (`SECRETS_EXTENSION`) |
+| `secrets-extension` | `.secret` | Extension of the encrypted files, with the leading dot (`SECRETS_EXTENSION`) |
 | `comment-tag` | `secret-changes` | Tag of the PR comment; use a different one per call |
 | `GPG_PRIVATE_KEY` (secret) | required | Key that decrypts the git-secret files; map your repo's secret name to it |
 
 ## A second store
 
-A repo with a second git-secret store (the agent store `.agent-secrets`, extension `agent.secret`) calls the workflow
+A repo with a second git-secret store (the agent store `.agent-secrets`, extension `.agent.secret`) calls the workflow
 once per store, each with its own `comment-tag` so the two comments stay apart. The `GPG_PRIVATE_KEY` must decrypt the
 files of that store (Not verified: whether one key serves both stores; pass a different secret per call if not).
 
@@ -46,7 +46,7 @@ files of that store (Not verified: whether one key serves both stores; pass a di
     uses: convidera/devops-cli/.github/workflows/secret-changes.yml@<release>
     with:
       secrets-dir: .agent-secrets
-      secrets-extension: agent.secret
+      secrets-extension: .agent.secret
       comment-tag: secret-changes-agent
     permissions:
       contents: read
