@@ -57,6 +57,24 @@ Each module needs a `.devops/commands.yaml` file. The structure is:
 
 All scripts listed under the same `<container>` run in a single shell process, in order, so `cd`, `export`, and other shell state carry over from one line to the next (a failing line aborts the rest, like `set -e`). Different containers — and different modules — still run as separate processes.
 
+### Which directories are modules
+
+The root `.devops/` plus every `.devops/` directory 1 to 3 levels below it. Inside a git work tree, discovery skips:
+
+- directories git ignores (checked with `git check-ignore`; tracked files are never ignored), and
+- nested repositories: a directory with its own `.git` (directory or file) below the root, such as vendored repos, fixtures or worktrees.
+
+These checkouts belong to other repositories, so their commands never run as part of this one. Outside a git work tree nothing is skipped automatically.
+
+An optional root `.devops/ignore` overrides both rules. One path or `path.Match` pattern per line, relative to the root, matched against each module directory and its parents; `#` starts a comment and the last matching line wins:
+
+```
+# never load anything under fixtures/
+fixtures/
+# load this nested repo anyway
+!vendor/shared-lib
+```
+
 ### Example
 
 ```

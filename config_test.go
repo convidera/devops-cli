@@ -2,7 +2,10 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -251,5 +254,169 @@ func TestDiscoverModules(t *testing.T) {
 	}
 	if len(modules) != 2 {
 		t.Errorf("discovered %d modules, want 2", len(modules))
+	}
+}
+
+// writeModule creates <root>/<dir>/.devops/agents.yaml defining `test`.
+func writeModule(t *testing.T, root, dir string) {
+	t.Helper()
+	p := filepath.Join(root, dir, ".devops")
+	if err := os.MkdirAll(p, 0755); err != nil {
+		t.Fatal(err)
+	}
+	content := "test:\n  host:\n    - echo " + dir + "\n"
+	if err := os.WriteFile(filepath.Join(p, "agents.yaml"), []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func gitInit(t *testing.T, dir string) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	if out, err := exec.Command("git", "init", "-q", dir).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+}
+
+func moduleNames(modules []*Module) []string {
+	var names []string
+	for _, m := range modules {
+		names = append(names, m.Name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func TestDiscoverModulesSkipsIgnoredAndNestedRepos(t *testing.T) {
+	root := t.TempDir()
+	gitInit(t, root)
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("targets/\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	writeModule(t, root, "services/api")   // normal monorepo module
+	writeModule(t, root, "targets/t-rax2") // gitignored checkout of another repo
+	writeModule(t, root, "vendor/lib")     // nested repository, not ignored
+	gitInit(t, filepath.Join(root, "vendor", "lib"))
+	t.Chdir(root)
+
+	modules, err := discoverModules()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := moduleNames(modules); !reflect.DeepEqual(got, []string{"services"}) {
+		t.Errorf("modules = %v, want [services]", got)
+	}
+	if got, err := moduleAgentsDefining(root, "test"); err != nil || !reflect.DeepEqual(got, []string{"services/api"}) {
+		t.Errorf("moduleAgentsDefining = %v, %v, want [services/api]", got, err)
+	}
+}
+
+func TestDiscoverModulesNestedRepoDeeperThanModule(t *testing.T) {
+	root := t.TempDir()
+	gitInit(t, root)
+	writeModule(t, root, "checkouts/other/app")
+	gitInit(t, filepath.Join(root, "checkouts", "other"))
+	t.Chdir(root)
+
+	modules, err := discoverModules()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(modules) != 0 {
+		t.Errorf("modules = %v, want none", moduleNames(modules))
+	}
+}
+
+func TestDiscoverModulesIgnoreFile(t *testing.T) {
+	root := t.TempDir()
+	gitInit(t, root)
+	writeModule(t, root, "services/api")
+	writeModule(t, root, "fixtures/sample")
+	writeModule(t, root, "vendor/lib")
+	gitInit(t, filepath.Join(root, "vendor", "lib"))
+	ignore := "# skip fixtures\nfixtures/\n!vendor/lib\n"
+	if err := os.MkdirAll(filepath.Join(root, ".devops"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".devops", "ignore"), []byte(ignore), 0644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+
+	modules, err := discoverModules()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := moduleNames(modules); !reflect.DeepEqual(got, []string{"services", "vendor"}) {
+		t.Errorf("modules = %v, want [services vendor]", got)
+	}
+}
+
+func TestDiscoverModulesOutsideGitKeepsEverything(t *testing.T) {
+	root := t.TempDir()
+	if insideGitWorkTree(root) {
+		t.Skip("temp dir is inside a git work tree")
+	}
+	writeModule(t, root, "services/api")
+	writeModule(t, root, "vendor/lib")
+	if err := os.MkdirAll(filepath.Join(root, "vendor", "lib", ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+
+	modules, err := discoverModules()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := moduleNames(modules); !reflect.DeepEqual(got, []string{"services", "vendor"}) {
+		t.Errorf("modules = %v, want [services vendor]", got)
+	}
+}
+
+func TestDiscoveryRulesMatch(t *testing.T) {
+	rules := discoveryRules{
+		{pattern: "targets"},
+		{pattern: "targets/keep", include: true},
+		{pattern: "*/fixtures"},
+	}
+	for dir, want := range map[string]ruleResult{
+		"targets/t-rax2":       ruleExclude,
+		"targets/keep/app":     ruleInclude,
+		"services/fixtures/db": ruleExclude,
+		"services/api":         ruleNone,
+	} {
+		if got := rules.match(dir); got != want {
+			t.Errorf("match(%q) = %v, want %v", dir, got, want)
+		}
+	}
+}
+
+func TestDiscoverModulesSkipsSubmodule(t *testing.T) {
+	root := t.TempDir()
+	gitInit(t, root)
+	sub := filepath.Join(t.TempDir(), "sub")
+	gitInit(t, sub)
+	writeModule(t, sub, "app")
+	git := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir, "-c", "user.email=t@t", "-c", "user.name=t", "-c", "protocol.file.allow=always"}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	git(sub, "add", ".")
+	git(sub, "commit", "-q", "-m", "init")
+	git(root, "submodule", "add", "-q", sub, "lib")
+	writeModule(t, root, "services/api")
+	t.Chdir(root)
+
+	modules, err := discoverModules()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := moduleNames(modules); !reflect.DeepEqual(got, []string{"services"}) {
+		t.Errorf("modules = %v, want [services]", got)
 	}
 }
