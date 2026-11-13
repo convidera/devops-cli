@@ -46,11 +46,10 @@ To keep a project agent-ready in CI, call the reusable workflow:
 ```yaml
 jobs:
   agent-ready:
-    # renovate: datasource=github-releases depName=convidera/devops-cli
     uses: convidera/devops-cli/.github/workflows/agent-ready.yml@v0.4.0
 ```
 
-The `# renovate:` line lets Renovate bump the ref with every release (step 12).
+Dependabot (`github-actions`) bumps the ref with every release (step 12).
 
 It takes optional `devops-version` and `working-directory` inputs. If the caller repo is private and devops-cli is not public to it, the workflow may need its repository access setting enabled under the devops-cli repo's Actions settings.
 
@@ -444,20 +443,20 @@ jobs:
 - Reference: convidera/security-dashboard `.github/workflows/copilot-code-review.yml`.
 
 ### 12. Keep the devops CLI current
-A project pins the CLI in several places: `MIN_VERSION` in `./devops`, any `DEVOPS_VERSION` in a workflow, and the `@<tag>` refs of the `convidera/devops-cli/.github/workflows/*.yml` reusable workflows. Let Renovate move them together, in one PR per release:
+A project pins the CLI in several places. Each release should reach all of them without anyone remembering to:
 
-- Put `# renovate: datasource=github-releases depName=convidera/devops-cli` on the line directly above every pin.
-- Add this manager and rule to `renovate.json`. Projects from convidera/vue-laravel-rest-template already run self-hosted Renovate (`.github/workflows/renovate.yaml`, limited to `custom.regex`); a project without Renovate copies that workflow and a `renovate.json` with `"enabledManagers": ["custom.regex"]`.
+- **Workflow refs** (`uses: convidera/devops-cli/.github/workflows/*.yml@<tag>`): Dependabot's `github-actions` ecosystem bumps them, grouped with the other actions. Nothing to add beyond a normal `github-actions` entry in `dependabot.yml`.
+- **`MIN_VERSION` in `./devops` and any `DEVOPS_VERSION` in a workflow**: no package manager reads these, so Renovate does. Put `# renovate: datasource=github-releases depName=convidera/devops-cli` on the line directly above each, and add this manager and rule to `renovate.json`. They give one "devops CLI" PR per release. Projects from convidera/vue-laravel-rest-template already run self-hosted Renovate (`.github/workflows/renovate.yaml`, limited to `custom.regex`); a project without Renovate copies that workflow and a `renovate.json` with `"enabledManagers": ["custom.regex"]`.
 
 ```json
 {
   "customManagers": [
     {
       "customType": "regex",
-      "description": "devops CLI pins, each with a '# renovate: datasource=github-releases depName=convidera/devops-cli' line above",
+      "description": "devops CLI pins no package manager reads, each with a '# renovate: datasource=github-releases depName=convidera/devops-cli' line above",
       "managerFilePatterns": ["/^devops$/", "/^\\.github/workflows/.+\\.ya?ml$/"],
       "matchStrings": [
-        "# renovate: datasource=(?<datasource>[a-z-]+?) depName=(?<depName>\\S+)\\s+(?:MIN_VERSION=\"|\\w+_VERSION: |-?\\s*uses: \\S+?@)(?<currentValue>v[^\"\\s]+)"
+        "# renovate: datasource=(?<datasource>[a-z-]+?) depName=(?<depName>\\S+)\\s+(?:MIN_VERSION=\"|\\w+_VERSION: )(?<currentValue>v[^\"\\s]+)"
       ]
     }
   ],
@@ -471,8 +470,7 @@ A project pins the CLI in several places: `MIN_VERSION` in `./devops`, any `DEVO
 }
 ```
 
-- If Dependabot updates `github-actions`, add an `ignore` with `dependency-name: "convidera/devops-cli*"` to that entry, so it doesn't bump the workflow refs on its own.
-- Check with `npx -p renovate renovate-config-validator renovate.json`, then run the Renovate workflow with `dry_run` after merging: its log shows one `renovate/devops-cli` branch updating every pin. Reference: convidera/vue-laravel-rest-template#352.
+- Check with `npx -p renovate renovate-config-validator renovate.json`, then run the Renovate workflow with `dry_run` after merging: its log shows one `renovate/devops-cli` branch updating the annotated pins. Reference: convidera/vue-laravel-rest-template#352 and #356.
 
 ## Validate before pushing
 - `docker compose config -q` (with a temporary `.env` from `.env.example`), `bash -n` and shellcheck on scripts, and `yq` parses every YAML file.
