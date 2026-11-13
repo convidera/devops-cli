@@ -203,27 +203,41 @@ func moduleDirs(root string) ([]string, error) {
 		return nil, err
 	}
 	inGit := insideGitWorkTree(root)
-	var ignored map[string]bool
-	if inGit {
-		if ignored, err = gitIgnored(root, candidates); err != nil {
-			return nil, err
-		}
-	}
 
-	var out []string
+	// Decide rules and nested repos first: git check-ignore aborts on paths
+	// inside a submodule, so only the remaining candidates are asked.
+	keep := map[string]bool{}
+	var unsure []string
 	for _, c := range candidates {
 		dir := filepath.ToSlash(filepath.Dir(c))
 		switch rules.match(dir) {
 		case ruleExclude:
 			continue
 		case ruleInclude:
+			keep[c] = true
+			continue
+		}
+		if !inGit {
+			keep[c] = true
+		} else if !nestedRepo(root, dir) {
+			unsure = append(unsure, c)
+		}
+	}
+	if len(unsure) > 0 {
+		ignored, err := gitIgnored(root, unsure)
+		if err != nil {
+			return nil, err
+		}
+		for _, c := range unsure {
+			keep[c] = !ignored[filepath.ToSlash(c)]
+		}
+	}
+
+	var out []string
+	for _, c := range candidates {
+		if keep[c] {
 			out = append(out, c)
-			continue
 		}
-		if inGit && (ignored[filepath.ToSlash(c)] || nestedRepo(root, dir)) {
-			continue
-		}
-		out = append(out, c)
 	}
 	return out, nil
 }

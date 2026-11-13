@@ -308,8 +308,8 @@ func TestDiscoverModulesSkipsIgnoredAndNestedRepos(t *testing.T) {
 	if got := moduleNames(modules); !reflect.DeepEqual(got, []string{"services"}) {
 		t.Errorf("modules = %v, want [services]", got)
 	}
-	if got := moduleAgentsDefining(root, "test"); !reflect.DeepEqual(got, []string{"services/api"}) {
-		t.Errorf("moduleAgentsDefining = %v, want [services/api]", got)
+	if got, err := moduleAgentsDefining(root, "test"); err != nil || !reflect.DeepEqual(got, []string{"services/api"}) {
+		t.Errorf("moduleAgentsDefining = %v, %v, want [services/api]", got, err)
 	}
 }
 
@@ -390,5 +390,33 @@ func TestDiscoveryRulesMatch(t *testing.T) {
 		if got := rules.match(dir); got != want {
 			t.Errorf("match(%q) = %v, want %v", dir, got, want)
 		}
+	}
+}
+
+func TestDiscoverModulesSkipsSubmodule(t *testing.T) {
+	root := t.TempDir()
+	gitInit(t, root)
+	sub := filepath.Join(t.TempDir(), "sub")
+	gitInit(t, sub)
+	writeModule(t, sub, "app")
+	git := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir, "-c", "user.email=t@t", "-c", "user.name=t", "-c", "protocol.file.allow=always"}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	git(sub, "add", ".")
+	git(sub, "commit", "-q", "-m", "init")
+	git(root, "submodule", "add", "-q", sub, "lib")
+	writeModule(t, root, "services/api")
+	t.Chdir(root)
+
+	modules, err := discoverModules()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := moduleNames(modules); !reflect.DeepEqual(got, []string{"services"}) {
+		t.Errorf("modules = %v, want [services]", got)
 	}
 }
