@@ -1,8 +1,12 @@
 package main
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	pathpkg "path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -127,7 +131,8 @@ func sortedKeys[V any](m map[string]V) []string {
 }
 
 // discoverModules finds all .devops directories containing commands.yaml
-// and/or agents.yaml, up to 3 levels deep.
+// and/or agents.yaml, up to 3 levels deep. See moduleDirs for which
+// directories are skipped.
 func discoverModules() ([]*Module, error) {
 	var modules []*Module
 
@@ -139,17 +144,9 @@ func discoverModules() ([]*Module, error) {
 		modules = append(modules, root)
 	}
 
-	var candidates []string
-	for _, pattern := range []string{
-		"*/.devops",
-		"*/*/.devops",
-		"*/*/*/.devops",
-	} {
-		matches, err := filepath.Glob(pattern)
-		if err != nil {
-			continue
-		}
-		candidates = append(candidates, matches...)
+	candidates, err := moduleDirs(".")
+	if err != nil {
+		return nil, err
 	}
 
 	names := uniqueModuleNames(candidates)
@@ -165,6 +162,184 @@ func discoverModules() ([]*Module, error) {
 	}
 
 	return modules, nil
+}
+
+// discoveryIgnoreFile lists extra paths to skip (or, prefixed with "!", to
+// load anyway) during module discovery, relative to the root.
+const discoveryIgnoreFile = ".devops/ignore"
+
+// moduleDirs lists the .devops directories 1 to 3 levels below root, relative
+// to root. Inside a git work tree it skips directories git ignores and nested
+// repositories (any directory below root with its own .git), so checkouts of
+// other repos kept inside this one (vendored repos, fixtures, audit targets,
+// worktrees) never contribute commands. Outside git nothing is skipped
+// automatically. Rules in .devops/ignore override both: the last matching line
+// wins, "path" excludes and "!path" includes.
+func moduleDirs(root string) ([]string, error) {
+	var candidates []string
+	for _, pattern := range []string{
+		"*/.devops",
+		"*/*/.devops",
+		"*/*/*/.devops",
+	} {
+		matches, err := filepath.Glob(filepath.Join(root, pattern))
+		if err != nil {
+			continue
+		}
+		for _, m := range matches {
+			rel, err := filepath.Rel(root, m)
+			if err != nil {
+				continue
+			}
+			candidates = append(candidates, rel)
+		}
+	}
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+
+	rules, err := loadDiscoveryRules(filepath.Join(root, discoveryIgnoreFile))
+	if err != nil {
+		return nil, err
+	}
+	inGit := insideGitWorkTree(root)
+	var ignored map[string]bool
+	if inGit {
+		if ignored, err = gitIgnored(root, candidates); err != nil {
+			return nil, err
+		}
+	}
+
+	var out []string
+	for _, c := range candidates {
+		dir := filepath.ToSlash(filepath.Dir(c))
+		switch rules.match(dir) {
+		case ruleExclude:
+			continue
+		case ruleInclude:
+			out = append(out, c)
+			continue
+		}
+		if inGit && (ignored[filepath.ToSlash(c)] || nestedRepo(root, dir)) {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out, nil
+}
+
+type ruleResult int
+
+const (
+	ruleNone ruleResult = iota
+	ruleExclude
+	ruleInclude
+)
+
+type discoveryRule struct {
+	pattern string
+	include bool
+}
+
+type discoveryRules []discoveryRule
+
+// loadDiscoveryRules reads .devops/ignore: one path or path.Match pattern per
+// line, relative to the root; blank lines and "#" comments are skipped. A
+// missing file means no rules.
+func loadDiscoveryRules(path string) (discoveryRules, error) {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var rules discoveryRules
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		r := discoveryRule{}
+		if strings.HasPrefix(line, "!") {
+			r.include = true
+			line = line[1:]
+		}
+		line = strings.Trim(strings.TrimPrefix(filepath.ToSlash(line), "./"), "/")
+		if line == "" {
+			continue
+		}
+		if _, err := pathpkg.Match(line, ""); err != nil {
+			return nil, fmt.Errorf("%s: bad pattern %q: %w", path, line, err)
+		}
+		r.pattern = line
+		rules = append(rules, r)
+	}
+	return rules, nil
+}
+
+// match reports the last rule matching dir or one of its parent directories.
+func (rs discoveryRules) match(dir string) ruleResult {
+	res := ruleNone
+	for _, r := range rs {
+		for p := dir; p != "." && p != "/" && p != ""; p = pathpkg.Dir(p) {
+			if ok, _ := pathpkg.Match(r.pattern, p); ok {
+				if r.include {
+					res = ruleInclude
+				} else {
+					res = ruleExclude
+				}
+				break
+			}
+		}
+	}
+	return res
+}
+
+func insideGitWorkTree(root string) bool {
+	out, err := exec.Command("git", "-C", root, "rev-parse", "--is-inside-work-tree").Output()
+	return err == nil && strings.TrimSpace(string(out)) == "true"
+}
+
+// gitIgnored returns the paths (slash-separated, relative to root) that git
+// ignores. Tracked files are never reported as ignored.
+func gitIgnored(root string, paths []string) (map[string]bool, error) {
+	var in bytes.Buffer
+	for _, p := range paths {
+		in.WriteString(filepath.ToSlash(p))
+		in.WriteByte(0)
+	}
+	cmd := exec.Command("git", "-C", root, "check-ignore", "-z", "--stdin")
+	cmd.Stdin = &in
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	// Exit 1 means none of the paths is ignored.
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		err = nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("git check-ignore: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	ignored := map[string]bool{}
+	for _, p := range strings.Split(string(out), "\x00") {
+		if p != "" {
+			ignored[p] = true
+		}
+	}
+	return ignored, nil
+}
+
+// nestedRepo reports whether dir or one of its parents below root has its own
+// .git (a directory, or a file for worktrees and submodules).
+func nestedRepo(root, dir string) bool {
+	for p := dir; p != "." && p != "/" && p != ""; p = pathpkg.Dir(p) {
+		if _, err := os.Lstat(filepath.Join(root, filepath.FromSlash(p), ".git")); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // uniqueModuleNames names each .devops directory by its first path segment and

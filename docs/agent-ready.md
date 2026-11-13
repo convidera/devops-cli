@@ -28,6 +28,7 @@ Design for exactly this environment; don't try to change it from the project.
 - A project only contributes YAML and scripts (`.devops/agents.yaml`, `.devops/agents/*.sh`). Don't copy or reimplement the CLI in the project.
 - If `devops` is missing on an agent's `PATH`, the runner image is broken: the agent stops and reports it, and doesn't work around it with `./devops` or raw `docker compose`.
 - Need a CLI change (new agent-mode behavior, a bug)? Open a PR in convidera/devops-cli, not a workaround in the project.
+- Module discovery skips, inside a git work tree, every directory git ignores and every nested repository (a directory below the root with its own `.git`). A tool that keeps other repos' checkouts inside the project (audit targets, vendored repos, fixtures, worktrees) therefore never runs their commands through `devops agents`. A root `.devops/ignore` can exclude more paths, or include a skipped one with `!path`; see the [README](../README.md#which-directories-are-modules). Still prefer keeping foreign checkouts outside the repo (for example in a sibling directory) as defence in depth; older CLIs load them.
 
 ### Built-in agent commands
 

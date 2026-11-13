@@ -67,18 +67,15 @@ func runDoctor(args []string) int {
 }
 
 // moduleAgentsDefining lists the module directories (up to 3 levels below
-// repo) whose .devops/agents.yaml defines cmd, for monorepos that keep
+// repo, skipped as in moduleDirs) whose .devops/agents.yaml defines cmd, for monorepos that keep
 // test/lint per module instead of at the root.
 func moduleAgentsDefining(repo, cmd string) []string {
 	var out []string
-	for _, pattern := range []string{"*/.devops/agents.yaml", "*/*/.devops/agents.yaml", "*/*/*/.devops/agents.yaml"} {
-		matches, _ := filepath.Glob(filepath.Join(repo, pattern))
-		for _, m := range matches {
-			if cfg, _, _, err := loadConfig(m); err == nil {
-				if _, ok := cfg[cmd]; ok {
-					rel, _ := filepath.Rel(repo, filepath.Dir(filepath.Dir(m)))
-					out = append(out, rel)
-				}
+	dirs, _ := moduleDirs(repo)
+	for _, d := range dirs {
+		if cfg, _, _, err := loadConfig(filepath.Join(repo, d, "agents.yaml")); err == nil {
+			if _, ok := cfg[cmd]; ok {
+				out = append(out, filepath.Dir(d))
 			}
 		}
 	}
