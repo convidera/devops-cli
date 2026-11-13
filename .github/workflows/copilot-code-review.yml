@@ -1,0 +1,23 @@
+name: Copilot Code Review Setup
+
+# Runner for Copilot code review. Without this file, Copilot code review falls back to
+# copilot-setup-steps.yml, i.e. onto the gha-runners-convidera-copilot scale set with the
+# full agent bootstrap (Docker stack), which a review does not need. Like
+# copilot-setup-steps.yml it is read from the default branch, must stay a single job
+# with this id, and is never a required check, so native `paths:` is fine here.
+# https://docs.github.com/en/copilot/how-tos/copilot-on-github/set-up-copilot/configure-runners
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/copilot-code-review.yml
+
+jobs:
+  copilot-setup-steps:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
