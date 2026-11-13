@@ -15,7 +15,7 @@ Design for exactly this environment; don't try to change it from the project.
 | Network | Egress on 80, 443 and 22; published ports answer on `127.0.0.1` in the session |
 | Tools | `devops` CLI (agent mode), docker compose + buildx, mkcert (no CA install), yq, jq, gh, node 22, git-secret (no key for the project's regular `.gitsecret` store; see "`.agent-secrets/`" below for the opt-in exception) |
 | Browser | Playwright MCP, headless Chromium: `*.test` → 127.0.0.1, HTTPS errors ignored. The shell can't resolve `*.test`; use `curl -k --resolve host:443:127.0.0.1` |
-| devops CLI | Built from [convidera/devops-cli](https://github.com/convidera/devops-cli), **v0.2.0+** (agent mode since v0.0.10, the built-ins below since v0.1.0, per-module `test`/`lint` in `doctor` and `init --trace` since v0.2.0), on `PATH` on runners. With `CLAUDECODE=1`/`DEVOPS_AGENT=1` it only runs `devops agents <cmd>` from `.devops/agents.yaml`; everything else exits 2. Its own status lines go to stderr |
+| devops CLI | Built from [convidera/devops-cli](https://github.com/convidera/devops-cli), **v0.4.0+** (agent mode since v0.0.10, the built-ins below since v0.1.0, per-module `test`/`lint` in `doctor` and `init --trace` since v0.2.0, module discovery skips git-ignored directories and nested repositories since v0.4.0), on `PATH` on runners. With `CLAUDECODE=1`/`DEVOPS_AGENT=1` it only runs `devops agents <cmd>` from `.devops/agents.yaml`; everything else exits 2. Its own status lines go to stderr |
 | Session start | For the project, its direct subdirectories and sibling repos checked out next to it (directories with a `.git`), the hook runs `devops agents init` in the background wherever `.devops/agents.yaml` exists; repos without one are ignored, and module directories of a monorepo are not scanned (only the repo root bootstraps). State lives under `/tmp/devops-agents/<dir>-<hash>/` (`log`, `pid`, `done` = exit code). Use `devops agents status` / `wait` to follow it |
 | Secrets | None by default -- agents only ever use `.env.example` placeholders. A project can opt specific non-prod files into `.agent-secrets/` if it genuinely can't bootstrap without them; see step 9 |
 | Preview | In a managed-coding-service session with the live preview on, `MCS_PREVIEW_HOST` (`as-<session>.preview.<domain>`) and `MCS_PREVIEW_URL` are set in the session. Only projects that opt in use them; see step 10 |
@@ -46,8 +46,11 @@ To keep a project agent-ready in CI, call the reusable workflow:
 ```yaml
 jobs:
   agent-ready:
-    uses: convidera/devops-cli/.github/workflows/agent-ready.yml@v0.2.0
+    # renovate: datasource=github-releases depName=convidera/devops-cli
+    uses: convidera/devops-cli/.github/workflows/agent-ready.yml@v0.4.0
 ```
+
+The `# renovate:` line lets Renovate bump the ref with every release (step 12).
 
 It takes optional `devops-version` and `working-directory` inputs. If the caller repo is private and devops-cli is not public to it, the workflow may need its repository access setting enabled under the devops-cli repo's Actions settings.
 
@@ -69,7 +72,7 @@ Some projects (ML training pipelines, libraries, CLIs) run on the host and have 
 - `bootstrap.sh` just installs dependencies and prepares local config: for example `uv sync`, then `[ -f .env ] || cp .env.example .env`. It must stay idempotent, headless and secret-free, and it must exit. The runner image has `uv`, python3, node 22, yq and jq; don't download toolchains in bootstrap.
 - Skip steps 2 (full-stack `.env.example`), 3 (compose conventions) and the compose parts of steps 4 and 5: no mkcert, ports, healthchecks or seeding. `devops agents doctor` does not require a compose file when `agents.yaml` and the bootstrap script don't use docker.
 - Keep commands fast and CPU-only. Anything that needs a GPU or a large model download (full training, export, serving) stays human-only; give agents a smoke variant or a stubbed test instead, and say in `AGENTS.md` which commands are which.
-- Steps 6 to 9 (launcher, `AGENTS.md`, housekeeping, optional `.agent-secrets/`) and 11 (Copilot setup steps and code review runner) apply unchanged. The preview (step 10) only makes sense for projects that serve HTTP.
+- Steps 6 to 9 (launcher, `AGENTS.md`, housekeeping, optional `.agent-secrets/`), 11 (Copilot setup steps and code review runner) and 12 (keeping the CLI current) apply unchanged. The preview (step 10) only makes sense for projects that serve HTTP.
 
 ## Steps
 
@@ -190,7 +193,7 @@ echo "Stack is up: https://<project>.test (login: <user> / <password>)"
 If a published port can clash, pick a free one and persist it in `.env` (Trax's `choose_port` helper does this for the Traefik dashboard and DB ports, and skips it when the service is already running); copy it from Trax's `bootstrap.sh`.
 
 ### 6. `./devops` launcher
-The project must not embed the CLI or its commands. Ship this thin launcher as `./devops`: it runs the `devops` from [convidera/devops-cli](https://github.com/convidera/devops-cli) if it is at least `MIN_VERSION`, looking on `PATH` first and then in its own install directory (`~/.local/bin`, override with `DEVOPS_INSTALL_DIR`), and otherwise downloads that release there for humans (`./devops install` does it explicitly). Humans normally go through `./devops`, so the CLI doesn't need to be on their `PATH`; on runners it is on `PATH` from the image. Agents never download: on a runner without a suitable CLI it exits 127 with "stop and report". Keep `MIN_VERSION` at **v0.0.10 or newer**, the first release with agent mode; bump it only when the project needs a newer CLI, for example a command or `doctor` behaviour added later (per-module `test`/`lint` needs v0.2.0).
+The project must not embed the CLI or its commands. Ship this thin launcher as `./devops`: it runs the `devops` from [convidera/devops-cli](https://github.com/convidera/devops-cli) if it is at least `MIN_VERSION`, looking on `PATH` first and then in its own install directory (`~/.local/bin`, override with `DEVOPS_INSTALL_DIR`), and otherwise downloads that release there for humans (`./devops install` does it explicitly). Humans normally go through `./devops`, so the CLI doesn't need to be on their `PATH`; on runners it is on `PATH` from the image. Agents never download: on a runner without a suitable CLI it exits 127 with "stop and report". `MIN_VERSION` must be **v0.0.10 or newer**, the first release with agent mode. Keep the `# renovate:` line above it: Renovate bumps it with every release (step 12), so humans get CLI fixes such as the v0.4.0 discovery hardening without anyone remembering to.
 
 **Legacy `./devops` with embedded commands:** if the project still has the old bash `./devops` that contains the commands themselves, migrate it first. Move every command into `.devops/commands.yaml` (run `devops <cmd>` for each to check it behaves the same), delete the bash logic, and only then replace `./devops` with the launcher. Don't keep the old script as a fallback.
 
@@ -201,7 +204,8 @@ The project must not embed the CLI or its commands. Ship this thin launcher as `
 # `./devops install` installs or upgrades it explicitly.
 set -u
 
-MIN_VERSION="v0.0.10"   # first release with agent mode
+# renovate: datasource=github-releases depName=convidera/devops-cli
+MIN_VERSION="v0.4.0"
 INSTALL_DIR="${DEVOPS_INSTALL_DIR:-$HOME/.local/bin}"
 
 is_agent() {
@@ -438,6 +442,37 @@ jobs:
 - Not verified: that GitHub accepts `ubuntu-latest` here (the docs only show `ubuntu-4-core`) and whether it runs the steps. Check one review run after merging: it must not land on `gha-runners-convidera-copilot`.
 - Org setting: Copilot, Runner type, has separate defaults for the cloud agent and code review; keep the code review default on the standard GitHub runner.
 - Reference: convidera/security-dashboard `.github/workflows/copilot-code-review.yml`.
+
+### 12. Keep the devops CLI current
+A project pins the CLI in several places: `MIN_VERSION` in `./devops`, any `DEVOPS_VERSION` in a workflow, and the `@<tag>` refs of the `convidera/devops-cli/.github/workflows/*.yml` reusable workflows. Let Renovate move them together, in one PR per release:
+
+- Put `# renovate: datasource=github-releases depName=convidera/devops-cli` on the line directly above every pin.
+- Add this manager and rule to `renovate.json`. Projects from convidera/vue-laravel-rest-template already run self-hosted Renovate (`.github/workflows/renovate.yaml`, limited to `custom.regex`); a project without Renovate copies that workflow and a `renovate.json` with `"enabledManagers": ["custom.regex"]`.
+
+```json
+{
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "devops CLI pins, each with a '# renovate: datasource=github-releases depName=convidera/devops-cli' line above",
+      "managerFilePatterns": ["/^devops$/", "/^\\.github/workflows/.+\\.ya?ml$/"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>[a-z-]+?) depName=(?<depName>\\S+)\\s+(?:MIN_VERSION=\"|\\w+_VERSION: |-?\\s*uses: \\S+?@)(?<currentValue>v[^\"\\s]+)"
+      ]
+    }
+  ],
+  "packageRules": [
+    {
+      "matchDepNames": ["convidera/devops-cli"],
+      "groupName": "devops CLI",
+      "commitMessagePrefix": "chore(devops):"
+    }
+  ]
+}
+```
+
+- If Dependabot updates `github-actions`, add an `ignore` with `dependency-name: "convidera/devops-cli*"` to that entry, so it doesn't bump the workflow refs on its own.
+- Check with `npx -p renovate renovate-config-validator renovate.json`, then run the Renovate workflow with `dry_run` after merging: its log shows one `renovate/devops-cli` branch updating every pin. Reference: convidera/vue-laravel-rest-template#352.
 
 ## Validate before pushing
 - `docker compose config -q` (with a temporary `.env` from `.env.example`), `bash -n` and shellcheck on scripts, and `yq` parses every YAML file.
