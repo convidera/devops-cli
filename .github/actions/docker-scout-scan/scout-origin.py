@@ -51,7 +51,10 @@ except Exception as error:
 def needed_by(package):
     """The manually installed packages that need `package`, nearest first (at most 3)."""
     name = package.split(" ")[0]
-    start = {p for p in installed if p == name or name in p} if installed else set()
+    # the exact package (or name:arch); only when there is none (Scout names the source package, which can differ from
+    # the binary packages) every package with the name in it, so that "openssl" does not also start from unrelated ones
+    start = {p for p in installed if p == name or p.startswith(name + ":")}
+    start = start or {p for p in installed if name in p}
     start = {p for p in start if p not in manual} or start
     seen, queue, found = set(start), deque((p, 0) for p in start), []
     while queue and len(found) < 3:
@@ -66,7 +69,7 @@ def needed_by(package):
     return found
 
 
-# --- layers: the Dockerfile line behind each layer of `docker save`, and the first layer that contains a file -------------------
+# --- layers: the Dockerfile line behind each layer of `docker save`, and the newest layer that contains a file -------------------
 layers = []  # oldest first: {"created_by", "line"} per layer; the base image's layers have no line
 
 
@@ -94,7 +97,7 @@ def clean(cmd):
 
 
 def first_layers(wanted):
-    """{path without leading slash: index of the first layer containing it}; fills `layers`."""
+    """{path without leading slash: index of the newest layer containing it}; fills `layers`."""
     found = {}
     with tempfile.TemporaryDirectory() as tmp:
         archive = os.path.join(tmp, "image.tar")
@@ -124,8 +127,11 @@ def first_layers(wanted):
                 with tarfile.open(fileobj=outer.extractfile(member), mode="r|*") as layer:
                     for entry in layer:
                         name = entry.name.lstrip("./")
-                        if name in wanted and name not in found:
-                            found[name] = index
+                        directory, _, base = name.rpartition("/")
+                        if base.startswith(".wh."):  # whiteout: a later layer removed the file
+                            found.pop((directory + "/" if directory else "") + base[4:], None)
+                        elif name in wanted:
+                            found[name] = index  # the newest layer wins: it supplies the file in the final image
     return found
 
 

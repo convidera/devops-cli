@@ -34,6 +34,8 @@ runs:
     # The scout action keeps a single comment per workflow and command, so the scans of a matrix would overwrite each other:
     # its own comment is off, docker-scout-report posts one for all images.
     - name: "🔍 Docker Scout"
+      # Infrastructure failures (Scout, registry, SARIF) must not stop the result steps or fail the job: it reports only.
+      continue-on-error: true
       uses: docker/scout-action@v1
       with:
         command: cves
@@ -114,7 +116,7 @@ runs:
 
     - name: "🔍 Upload Docker Scout raw data"
       continue-on-error: true
-      uses: actions/upload-artifact@v7
+      uses: actions/upload-artifact@v7.0.2
       with:
         name: sarif-${{ inputs.name }}
         path: scout-raw/${{ inputs.name }}
@@ -122,7 +124,7 @@ runs:
 
     - name: "🔍 Upload Docker Scout result"
       continue-on-error: true
-      uses: actions/upload-artifact@v7
+      uses: actions/upload-artifact@v7.0.2
       with:
         name: scout-${{ inputs.name }}
         path: scout/${{ inputs.name }}.json
