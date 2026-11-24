@@ -10,6 +10,12 @@ inputs:
     description: "Identifies the comment: one comment per tag and pull request"
     required: false
     default: docker-scout
+  remove-when-empty:
+    description: >-
+      Delete the comment of an earlier run when this run has no result. Pass false when images changed but their scans
+      failed (the last valid comment then stays), e.g. `${{ needs.changes.outputs.images_any != 'true' }}`
+    required: false
+    default: "true"
   token:
     description: "Token with pull-requests: write"
     required: false
@@ -45,9 +51,9 @@ runs:
         PR_NUMBER: ${{ github.event.pull_request.number }}
       run: '"${{ github.action_path }}/../pr-comment/pr-comment.sh" "${{ inputs.tag }}" scout-comment.md'
 
-    # No result in this run (no image was scanned): do not leave the comment of an earlier run behind.
+    # No image was scanned in this run: do not leave the comment of an earlier run behind.
     - name: Remove the outdated comment
-      if: steps.build.outputs.found != 'true'
+      if: steps.build.outputs.found != 'true' && inputs.remove-when-empty == 'true'
       continue-on-error: true
       shell: bash
       env:

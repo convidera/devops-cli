@@ -86,7 +86,8 @@ def read_archive(archive):
 def clean(cmd):
     cmd = re.sub(r"\s*#\s*buildkit\s*$", "", cmd)
     cmd = re.sub(r"^(RUN\s+)?(\|\d+\s+(\S+=\S*\s+)*)?", "", cmd)
-    cmd = re.sub(r"^/bin/(ba)?sh -c\s+(#\(nop\)\s*)?", "", cmd)
+    # also the SHELL of the Dockerfile: "/bin/bash -euo pipefail -c ..."
+    cmd = re.sub(r"^/bin/(?:ba)?sh\s+(?:(?:-\S+|pipefail)\s+)*?-c\s+(?:#\(nop\)\s*)?", "", cmd)
     cmd = re.sub(r"^(COPY|ADD)\s+", "", cmd)
     cmd = re.sub(r"^(--\S+\s+)+", "", cmd)
     return " ".join(cmd.split())

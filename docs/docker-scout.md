@@ -49,7 +49,7 @@ Build each image **with `load: true`** (the scan reads it from the local daemon)
           dockerhub-password: ${{ secrets.DOCKER_HUB_PASSWORD }}
 
   scout-report:
-    needs: image-scan
+    needs: [changes, image-scan]
     if: always() && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: gha-runners-convidera-tiny
     permissions:
@@ -57,6 +57,9 @@ Build each image **with `load: true`** (the scan reads it from the local daemon)
       pull-requests: write
     steps:
       - uses: convidera/devops-cli/.github/actions/docker-scout-report@v0.5.0
+        with:
+          # remove the comment only when no image changed, not when a scan failed
+          remove-when-empty: ${{ needs.changes.outputs.images_any != 'true' }}
 ```
 
 Notes:
@@ -64,8 +67,9 @@ Notes:
 - Pin the actions to a release tag like the workflows (`@v0.5.0`); they ship from the same tags.
 - `docker-scout-report` needs no checkout. Run it only for pull requests of the same repo: a fork's token cannot write comments.
 - `name` is the key of the image in this run (artifact and file names), unique per matrix entry.
-- A pull request that changes no image: skip `image-scan` (a `changes` path filter) and let `scout-report` still run;
-  with no result it removes the comment of an earlier run.
+- A pull request that changes no image: skip `image-scan` (a `changes` path filter) but let `scout-report` still run (do not
+  gate it by the filter): with no result and `remove-when-empty` it removes the comment of an earlier run, for example
+  after a push that reverts the image changes. When images changed and a scan failed, pass `false` so the last comment stays.
 - Keep the scan out of the aggregating required check: it reports, it does not decide.
 - The origin of a finding (Dockerfile line, `neededBy`) works for Debian-based images and is best effort; Alpine and others get less
   detail. The raw inputs are kept as the artifact `sarif-<name>` for seven days.
