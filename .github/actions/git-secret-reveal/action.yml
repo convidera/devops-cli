@@ -1,0 +1,72 @@
+name: "Git secret reveal"
+description: >-
+  Reveals the git-secret files of the checked out repository. The GPG private key is imported with plain `gpg` into a
+  temporary, isolated GnuPG home that is removed again when the step ends (also on failure): no third-party action sees
+  the key and nothing of it stays on a persistent runner. Needs a checkout of the repository first.
+
+inputs:
+  gpg-key:
+    description: "Armored GPG private key that can decrypt the repository's git-secret files"
+    required: true
+  gpg-passphrase:
+    description: "Passphrase of the key, if it has one"
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Install git-secret if not installed yet
+      shell: bash
+      run: |
+        if ! command -v git-secret > /dev/null; then
+          sudo apt-get update && sudo apt-get install -y git-secret
+        fi
+
+    # Import and reveal in ONE step: the key lives in a throwaway GNUPGHOME that the trap removes (the agent is stopped
+    # first), so a later job on the same runner finds neither the key nor a running agent.
+    - name: Reveal the secrets
+      shell: bash
+      env:
+        GPG_KEY: ${{ inputs.gpg-key }}
+        GPG_PASSPHRASE: ${{ inputs.gpg-passphrase }}
+      run: |
+        set -euo pipefail
+        # The agent socket lives in this directory and a socket path is limited to about 100 characters.
+        base="${RUNNER_TEMP:-/tmp}"
+        [ "${#base}" -le 60 ] || base=/tmp
+        GNUPGHOME="$(mktemp -d "$base/gnupg.XXXXXX")"
+        chmod 700 "$GNUPGHOME"
+        export GNUPGHOME
+        # Stop the agent (it holds the key in memory; deleting its directory does not end it) and check that it is gone:
+        # a failed shutdown fails the step instead of passing silently. The agent of this temporary home is found by
+        # its command line (it carries the home) or by its socket.
+        agent_running() { pgrep -f "gpg-agent.*$GNUPGHOME" > /dev/null 2>&1 || [ -S "$GNUPGHOME/S.gpg-agent" ]; }
+        cleanup() {
+          status=$?
+          gpgconf --kill all > /dev/null 2>&1 || true
+          if agent_running; then
+            gpg-connect-agent KILLAGENT /bye > /dev/null 2>&1 || true
+            pkill -f "gpg-agent.*$GNUPGHOME" > /dev/null 2>&1 || true
+            sleep 1
+          fi
+          if agent_running; then
+            echo "::error::The temporary gpg-agent could not be stopped, the key may still be in its memory."
+            rm -rf "$GNUPGHOME"
+            exit 1
+          fi
+          rm -rf "$GNUPGHOME"
+          exit "$status"
+        }
+        trap cleanup EXIT
+
+        # Loopback pinentry: a key with a passphrase also works without a terminal. The passphrase goes in a file of the
+        # temporary home (not on a command line, where `ps` shows it), gpg reads it from the configuration.
+        echo "pinentry-mode loopback" > "$GNUPGHOME/gpg.conf"
+        if [ -n "$GPG_PASSPHRASE" ]; then
+          (umask 077; printf '%s' "$GPG_PASSPHRASE" > "$GNUPGHOME/passphrase")
+          echo "passphrase-file $GNUPGHOME/passphrase" >> "$GNUPGHOME/gpg.conf"
+        fi
+
+        printf '%s\n' "$GPG_KEY" | gpg --batch --yes --import
+        git secret reveal -f
