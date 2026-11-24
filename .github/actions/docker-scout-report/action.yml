@@ -1,0 +1,62 @@
+name: "Docker Scout report"
+description: >-
+  ONE pull request comment for all images scanned by docker-scout-scan in this run (totals, the part inherited from the base
+  image and the part in our own layers, linked to the Dockerfile lines at the pull request head). Updated in place on every
+  run, removed when the run scanned no image. Run it in a job of its own that `needs` the scan jobs (with `if: always()`),
+  with `pull-requests: write`, and not for pull requests from forks (their token cannot write comments).
+
+inputs:
+  tag:
+    description: "Identifies the comment: one comment per tag and pull request"
+    required: false
+    default: docker-scout
+  remove-when-empty:
+    description: >-
+      Delete the comment of an earlier run when this run has no result. Pass false when images changed but their scans
+      failed (the last valid comment then stays), e.g. `${{ needs.changes.outputs.images_any != 'true' }}`
+    required: false
+    default: "true"
+  token:
+    description: "Token with pull-requests: write"
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Download the scan results
+      continue-on-error: true
+      uses: actions/download-artifact@v8.0.2
+      with:
+        path: scout
+        pattern: scout-*
+        merge-multiple: true
+
+    - name: Build the comment
+      id: build
+      shell: bash
+      env:
+        SCOUT_COMMIT: ${{ github.event.pull_request.head.sha }}
+      run: |
+        if ls scout/*.json > /dev/null 2>&1; then
+          "${{ github.action_path }}/scout-comment.sh" scout "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" > scout-comment.md
+          echo "found=true" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Comment on the pull request
+      if: steps.build.outputs.found == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+      run: '"${{ github.action_path }}/../pr-comment/pr-comment.sh" "${{ inputs.tag }}" scout-comment.md'
+
+    # No image was scanned in this run: do not leave the comment of an earlier run behind.
+    - name: Remove the outdated comment
+      if: steps.build.outputs.found != 'true' && inputs.remove-when-empty == 'true'
+      continue-on-error: true
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+      run: '"${{ github.action_path }}/../pr-comment/pr-comment.sh" "${{ inputs.tag }}" --delete'

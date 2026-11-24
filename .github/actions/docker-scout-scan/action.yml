@@ -1,0 +1,131 @@
+name: "Docker Scout scan"
+description: >-
+  CVE scan (critical, high, medium) of an image that is already loaded into the runner's Docker daemon: the full report goes
+  to the job summary, a small result file (with where each finding comes from) is uploaded for docker-scout-report, which posts
+  ONE pull request comment for all images. It reports and never fails the job. Build the image first (docker/build-push-action
+  with `load: true`) and log in to Docker Hub if the scan needs it.
+
+inputs:
+  image:
+    description: "Image reference in the local daemon, e.g. my-org/app:ci"
+    required: true
+  name:
+    description: "Short unique key of the image in this run (artifact and file names), e.g. backend"
+    required: true
+  dockerfile:
+    description: "Dockerfile of the image, repository relative; the origin of a finding is mapped to its lines"
+    required: true
+  severities:
+    description: "Severities to report"
+    required: false
+    default: critical,high,medium
+  dockerhub-user:
+    description: "Docker Hub user for the scout action"
+    required: false
+    default: ""
+  dockerhub-password:
+    description: "Docker Hub password or token for the scout action"
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    # The scout action keeps a single comment per workflow and command, so the scans of a matrix would overwrite each other:
+    # its own comment is off, docker-scout-report posts one for all images.
+    - name: "🔍 Docker Scout"
+      # Infrastructure failures (Scout, registry, SARIF) must not stop the result steps or fail the job: it reports only.
+      continue-on-error: true
+      uses: docker/scout-action@v1
+      with:
+        command: cves
+        image: local://${{ inputs.image }}
+        only-severities: ${{ inputs.severities }}
+        summary: true
+        write-comment: false
+        sarif-file: scout-${{ inputs.name }}.sarif
+        dockerhub-user: ${{ inputs.dockerhub-user }}
+        dockerhub-password: ${{ inputs.dockerhub-password }}
+
+    # The same scan without what comes from the base image (Scout detects the base image itself): what is left is in our own
+    # layers, the part we can change. The rest is inherited and only goes away with a base image update.
+    - name: "🔍 Docker Scout own layers"
+      continue-on-error: true
+      uses: docker/scout-action@v1
+      with:
+        command: cves
+        image: local://${{ inputs.image }}
+        only-severities: ${{ inputs.severities }}
+        ignore-base: true
+        summary: false
+        write-comment: false
+        sarif-file: scout-${{ inputs.name }}-own.sarif
+        dockerhub-user: ${{ inputs.dockerhub-user }}
+        dockerhub-password: ${{ inputs.dockerhub-password }}
+
+    - name: "🔍 Docker Scout result"
+      continue-on-error: true
+      shell: bash
+      env:
+        NAME: ${{ inputs.name }}
+        IMAGE: ${{ inputs.image }}
+      run: |
+        mkdir -p scout
+        # severity: Scout puts the CVSS severity (text) or score on the rule; without either it counts as high.
+        # own: still reported with the base image ignored; without that scan (no file) nothing counts as ours.
+        own="scout-${NAME}-own.sarif"
+        [ -f "$own" ] || echo '{}' > "$own"
+        jq -c --arg name "$IMAGE" --slurpfile own "$own" '
+          def sev($p):
+            ($p.cvssV3_severity // $p["security-severity"] // "") | tostring | ascii_downcase
+            | if . == "critical" or . == "high" or . == "medium" then .
+              elif test("^[0-9.]+$") then (if tonumber >= 9 then "critical" elif tonumber >= 7 then "high" else "medium" end)
+              else "high" end;
+          # the package the vulnerability is in, "openssl 3.5.7-1~deb13u3": the first package URL (pkg:deb/debian/openssl@...)
+          # Scout puts in the result or on the rule; empty when there is none
+          def pkg($result; $rule):
+            (([$result, $rule] | tojson | [match("pkg:[^\\\\\\s\"?#]+").string] | first) // "")
+            | sub("^pkg:[^/]+/([^/]+/)?"; "") | gsub("%40"; "@") | sub("@"; " ") | gsub("%2B"; "+") | gsub("%7E"; "~") | gsub("%3A"; ":");
+          def findings:
+            [.runs[]?
+              | (.tool.driver.rules // []) as $rules
+              | .results[]?
+              | .ruleId as $id
+              | (first($rules[] | select(.id == $id)) // {}) as $rule
+              | {id: $id, severity: sev($rule.properties // {}), package: pkg(.; $rule)}] | unique_by(.id);
+          ([$own[0] | .runs[]?.results[]?.ruleId] | unique) as $ownIds
+          | {image: $name,
+             findings: (findings | map(. + {own: (.id as $id | $ownIds | index($id) != null)}))}' \
+          "scout-${NAME}.sarif" > "scout/${NAME}.json"
+
+    # Where each finding comes from: the Dockerfile line of its layer and the packages we install that need it. Best effort
+    # (Debian images; others just get less detail). The raw inputs are kept as an artifact (sarif-<name>) for inspection.
+    - name: "🔍 Docker Scout origin"
+      continue-on-error: true
+      shell: bash
+      env:
+        NAME: ${{ inputs.name }}
+        IMAGE: ${{ inputs.image }}
+        DOCKERFILE: ${{ inputs.dockerfile }}
+      run: |
+        mkdir -p scout-raw
+        cp "scout-${NAME}.sarif" "scout-raw-${NAME}.sarif" || true
+        python3 "${{ github.action_path }}/scout-origin.py" "$IMAGE" "$DOCKERFILE" \
+          "scout-${NAME}.sarif" "scout/${NAME}.json" "scout-raw/${NAME}"
+        mv "scout-raw-${NAME}.sarif" "scout-raw/${NAME}/scout.sarif" || true
+
+    - name: "🔍 Upload Docker Scout raw data"
+      continue-on-error: true
+      uses: actions/upload-artifact@v7.0.2
+      with:
+        name: sarif-${{ inputs.name }}
+        path: scout-raw/${{ inputs.name }}
+        retention-days: 7
+
+    - name: "🔍 Upload Docker Scout result"
+      continue-on-error: true
+      uses: actions/upload-artifact@v7.0.2
+      with:
+        name: scout-${{ inputs.name }}
+        path: scout/${{ inputs.name }}.json
+        retention-days: 1
