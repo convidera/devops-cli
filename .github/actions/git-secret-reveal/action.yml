@@ -38,7 +38,26 @@ runs:
         GNUPGHOME="$(mktemp -d "$base/gnupg.XXXXXX")"
         chmod 700 "$GNUPGHOME"
         export GNUPGHOME
-        cleanup() { gpgconf --kill all > /dev/null 2>&1 || true; rm -rf "$GNUPGHOME"; }
+        # Stop the agent (it holds the key in memory; deleting its directory does not end it) and check that it is gone:
+        # a failed shutdown fails the step instead of passing silently. The agent of this temporary home is found by
+        # its command line (it carries the home) or by its socket.
+        agent_running() { pgrep -f "gpg-agent.*$GNUPGHOME" > /dev/null 2>&1 || [ -S "$GNUPGHOME/S.gpg-agent" ]; }
+        cleanup() {
+          status=$?
+          gpgconf --kill all > /dev/null 2>&1 || true
+          if agent_running; then
+            gpg-connect-agent KILLAGENT /bye > /dev/null 2>&1 || true
+            pkill -f "gpg-agent.*$GNUPGHOME" > /dev/null 2>&1 || true
+            sleep 1
+          fi
+          if agent_running; then
+            echo "::error::The temporary gpg-agent could not be stopped, the key may still be in its memory."
+            rm -rf "$GNUPGHOME"
+            exit 1
+          fi
+          rm -rf "$GNUPGHOME"
+          exit "$status"
+        }
         trap cleanup EXIT
 
         # Loopback pinentry: a key with a passphrase also works without a terminal. The passphrase goes in a file of the
