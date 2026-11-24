@@ -1,0 +1,42 @@
+name: "PR comment"
+description: >-
+  One pull request comment per tag, created or updated in place, or deleted. Plain `curl` and `jq`, no Node action.
+  Keeps the marker of thollander/actions-comment-pull-request, so comments that action wrote are found and updated.
+
+inputs:
+  tag:
+    description: "Identifies the comment: one comment per tag and pull request"
+    required: true
+  file:
+    description: "Markdown file with the comment body (create or update)"
+    required: false
+    default: ""
+  delete:
+    description: "Delete the comment of this tag instead (true/false)"
+    required: false
+    default: "false"
+  pr-number:
+    description: "Pull request number"
+    required: false
+    default: ${{ github.event.pull_request.number }}
+  token:
+    description: "Token with pull-requests: write"
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        TAG: ${{ inputs.tag }}
+        FILE: ${{ inputs.file }}
+        DELETE: ${{ inputs.delete }}
+      run: |
+        if [ "$DELETE" = "true" ]; then
+          "${{ github.action_path }}/pr-comment.sh" "$TAG" --delete
+        else
+          "${{ github.action_path }}/pr-comment.sh" "$TAG" "$FILE"
+        fi
