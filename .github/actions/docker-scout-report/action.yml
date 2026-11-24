@@ -13,7 +13,7 @@ inputs:
   remove-when-empty:
     description: >-
       Delete the comment of an earlier run when this run has no result. Pass false when images changed but their scans
-      failed (the last valid comment then stays), e.g. `${{ needs.changes.outputs.images_any != 'true' }}`
+      failed (the last valid comment then stays). Pass the negation of "images changed", see docs/docker-scout.md.
     required: false
     default: "true"
   token:
